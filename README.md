@@ -2,8 +2,9 @@
 
 MPRIS Lyrics 是一个面向 GNOME Shell 50 的极简扩展。它自动发现会话总线上的
 `org.mpris.MediaPlayer2.*` 播放器，从 MPRIS 元数据查询 LRCLIB，并在顶部状态栏
-显示当前一句同步歌词。点击歌词会打开 Shell 原生 popup，其中包含歌曲信息、可滚动
-歌词、逐行/逐词高亮、可选的行级双语翻译、逐歌曲时间偏移和播放器选择。
+显示当前一句同步歌词。点击歌词会打开 Shell 原生 popup，其中包含 MPRIS 封面、媒体
+信息、播放进度、可滚动歌词、逐行/逐词高亮、可选的行级双语翻译、逐歌曲时间偏移和
+播放器选择。
 原歌词统一归一化为 `LyricsDocument`，翻译独立保存为按 `lineId` 对齐的
 `TranslationDocument`；翻译不会改写原文或 timing。
 
@@ -139,14 +140,20 @@ Fish 用户可直接运行上述命令；Makefile 内部使用 `make` 自己的�
 - `translation-cache.js`：与 LRCLIB cache 分离的长期翻译 cache。
 - `storage.js`：SHA-256 track key、cache schema v2 原始 provider payload、v1 兼容和
   per-track offset store。
-- `indicator.js`：`PanelMenu` popup、静态/逐行/逐词显示、滚动、offset 和播放器控件。
+- `indicator.js`：symbolic panel indicator、媒体 header、播放进度、歌词滚动、offset
+  和播放器控件。
+- `artwork-loader.js`、`artwork-view.js`：`file://`/HTTP(S) 异步封面加载、大小限制、
+  disk cache、取消/race 校验、TextureCache 解码和 fallback。
+- `ui-utils.js`：播放时间格式化与进度 fraction 的纯函数。
 - `prefs.js`、`schemas/`：GTK4/Libadwaita Preferences 和正式 GSettings schema。
 - `js-yaml.mjs`、`LICENSE.js-yaml`：随扩展打包的 js-yaml 4.1.0 readable ESM 与
   MIT license；`README.js-yaml.md` 记录固定 SHA-256 和可重复取得方式。
 
-没有周期性 polling。播放器发现使用 `NameOwnerChanged`，状态更新使用
+没有周期性 MPRIS polling。播放器发现使用 `NameOwnerChanged`，状态更新使用
 `PropertiesChanged`，跳转使用 `Seeked`；歌词显示只为下一行或 popup 中下一 word
-边界安排一次性本地 timer。popup 关闭、暂停、换歌或 disable 时 word timer 会移除。
+边界安排一次性本地 timer。popup 打开时每 500ms 从现有 monotonic playback clock
+刷新一次纯 UI 进度，关闭后立即移除；不会额外读取 D-Bus Position。popup 关闭、暂停、
+换歌或 disable 时 word timer 会移除。
 暂停、恢复和换歌时会单次读取 Position 重新校准，Seeked 信号直接提供新的 Position
 锚点。
 
@@ -158,10 +165,11 @@ timer 不重建或更新译文 actor。
 
 ## 行为
 
-- 有逐行或逐词歌词时，顶栏都只显示 `♪ 当前整句歌词`。
+- 有逐行或逐词歌词时，顶栏使用主题 symbolic music icon 加当前整句歌词；关闭
+  `show-icon` 只隐藏 icon，不改动 label 文本。
 - Lyricsfile 的 word timing 只影响 popup；当前 word 使用 inherited theme foreground、
   underline/weight 和 alpha 区分已唱、当前、未唱，不使用固定鲜艳颜色。
-- instrumental 显示 `♪ Instrumental`，popup 显示 `Instrumental track`，并作为
+- instrumental 在顶栏显示 `Instrumental`，popup 显示 `Instrumental track`，并作为
   positive cache 保存。
 - plain lyrics 作为静态内容显示，不自动滚动，也不伪造时间戳。
 - 翻译默认关闭。启用后支持 Original + Translation、Original only 和
@@ -174,10 +182,12 @@ timer 不重建或更新译文 actor。
 - 翻译 cache 位于
   `$XDG_CACHE_HOME/mpris-lyrics/translations/<sha256>.json`，key 包含
   `sourceLyricsHash + targetLanguage + provider + model + schema version`。
-- 查询中、无歌词、歌词开始前以及 LRC 的空白时间标签处显示
-  `♪ Title — Artist`。
+- 查询中、无歌词、歌词开始前以及 LRC 的空白时间标签处显示 `Title — Artist`。
 - popup 始终保留 title / artist，album 存在时显示；无歌词时显示 `No lyrics found`。
-- popup 的 `-0.5s`、`+0.5s` 和 `Reset` 控制当前歌曲 offset，范围为 -10s 到 +10s；
+  `mpris:artUrl` 缺失或失败时保留 symbolic fallback；HTTP(S) 封面按 artUrl SHA-256
+  缓存到 `$XDG_CACHE_HOME/mpris-lyrics/artwork/`，最多 128 张或 64 MiB，单次响应上限
+  8 MiB。
+- popup 的 symbolic `−`/`+` 和 `Reset` 控制当前歌曲 offset，范围为 -10s 到 +10s；
   Preferences 单独控制全局 offset。最终位置为
   `playbackPosition + globalOffset + trackOffset`。
 - 每首歌 offset 使用 track metadata 的 SHA-256 key，保存到
@@ -192,7 +202,7 @@ timer 不重建或更新译文 actor。
 - 播放器全部消失或没有有效标题时隐藏面板项。
 - `/api/get` 携带 title、artist、album 和秒级 duration；仅在 404 后使用 structured
   `/api/search`，再以 title/artist/album/duration 和同步质量评分，低于阈值不采用。
-- 所有请求使用 `MPRIS Lyrics/5.0 (mpris-lyrics@eureka)` User-Agent，顺序发送并间隔
+- LRCLIB 请求使用 `MPRIS Lyrics/5.0 (mpris-lyrics@eureka)` User-Agent，顺序发送并间隔
   300ms；429 最多重试一次且尊重 `Retry-After`。
 
 正式 translation settings：`translation-enabled`、`translation-target-language`、

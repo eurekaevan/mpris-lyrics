@@ -62,16 +62,25 @@ export function parseMetadata(value) {
         title: unpackString(metadata['xesam:title']),
         artist,
         album: unpackString(metadata['xesam:album']),
+        artUrl: unpackString(metadata['mpris:artUrl']),
         durationUs: Math.max(0, unpackNumber(metadata['mpris:length'])),
     };
 }
 
 function emptyMetadata() {
-    return {trackId: '', title: '', artist: '', album: '', durationUs: 0};
+    return {
+        trackId: '',
+        title: '',
+        artist: '',
+        album: '',
+        artUrl: '',
+        durationUs: 0,
+    };
 }
 
 function metadataKey(metadata) {
     return [
+        metadata.trackId,
         metadata.title,
         metadata.artist,
         metadata.album,

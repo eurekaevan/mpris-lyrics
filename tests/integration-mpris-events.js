@@ -55,8 +55,8 @@ async function waitUntil(predicate, message) {
     throw new Error(message);
 }
 
-function metadata(title, durationUs = 180_000_000) {
-    return {
+function metadata(title, durationUs = 180_000_000, artUrl = '') {
+    const value = {
         'mpris:trackid': new GLib.Variant(
             'o', '/org/mpris/MediaPlayer2/event_test'),
         'xesam:title': new GLib.Variant('s', title),
@@ -64,6 +64,9 @@ function metadata(title, durationUs = 180_000_000) {
         'xesam:album': new GLib.Variant('s', 'Event Album'),
         'mpris:length': new GLib.Variant('x', durationUs),
     };
+    if (artUrl)
+        value['mpris:artUrl'] = new GLib.Variant('s', artUrl);
+    return value;
 }
 
 const connection = Gio.DBus.session;
@@ -230,6 +233,18 @@ async function run() {
         'the backward Seeked signal did not set the anchor');
     assert(positionGets === beforeSeekGets,
         'Seeked should not cause an extra Position Get');
+
+    const beforeArtworkGets = positionGets;
+    currentMetadata = metadata(
+        'Initial Track', 180_000_000, 'file:///tmp/event-cover.png');
+    propertiesChanged({
+        Metadata: new GLib.Variant('a{sv}', currentMetadata),
+    });
+    await waitUntil(
+        () => state?.metadata.artUrl === 'file:///tmp/event-cover.png',
+        'an artUrl-only metadata change was not emitted');
+    assert(positionGets === beforeArtworkGets,
+        'an artUrl-only change should not recalibrate playback Position');
 
     const beforeMetadataGets = positionGets;
     currentMetadata = metadata('Replacement Track');

@@ -1,7 +1,8 @@
 UUID := mpris-lyrics@eureka
 USER_DATA_DIR ?= $(HOME)/.local/share
 EXTENSION_DIR := $(USER_DATA_DIR)/gnome-shell/extensions/$(UUID)
-SOURCES := metadata.json extension.js indicator.js lyrics.js lyrics-document.js \
+SOURCES := metadata.json extension.js indicator.js artwork-loader.js \
+	artwork-view.js ui-utils.js lyrics.js lyrics-document.js \
 	lyrics-matcher.js lyrics-normalizer.js lyrics-parser.js \
 	lyrics-synchronizer.js lyricsfile-parser.js mpris.js prefs.js storage.js \
 	credentials.js translation-batching.js translation-cache.js \
@@ -21,10 +22,14 @@ check:
 	gjs -m tests/test-translation-document.js
 	gjs -m tests/test-translation-service.js
 	gjs -m tests/test-mpris.js
+	gjs -m tests/test-ui-utils.js
 	gjs -m tests/test-player-policy.js
 	gnome-extensions pack --force --out-dir=/tmp \
 		--schema=$(SCHEMA) \
 		--extra-source=indicator.js \
+		--extra-source=artwork-loader.js \
+		--extra-source=artwork-view.js \
+		--extra-source=ui-utils.js \
 		--extra-source=lyrics.js \
 		--extra-source=lyrics-document.js \
 		--extra-source=lyrics-matcher.js \
@@ -46,6 +51,7 @@ check:
 
 integration:
 	dbus-run-session -- gjs -m tests/integration-mpris-events.js
+	gjs -m tests/integration-artwork-loader.js
 	gjs -m tests/test-lyrics-errors.js
 	gjs -m tests/integration-lyrics-http.js
 	gjs -m tests/integration-storage.js
@@ -76,6 +82,9 @@ pack:
 	gnome-extensions pack --force \
 		--schema=$(SCHEMA) \
 		--extra-source=indicator.js \
+		--extra-source=artwork-loader.js \
+		--extra-source=artwork-view.js \
+		--extra-source=ui-utils.js \
 		--extra-source=lyrics.js \
 		--extra-source=lyrics-document.js \
 		--extra-source=lyrics-matcher.js \

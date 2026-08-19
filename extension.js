@@ -17,10 +17,23 @@ import {
 
 const MIN_LYRICS_OFFSET_MS = -10_000;
 const MAX_LYRICS_OFFSET_MS = 10_000;
+const PROGRESS_UPDATE_INTERVAL_MS = 500;
+const MPRIS_NO_TRACK_ID = '/org/mpris/MediaPlayer2/TrackList/NoTrack';
 
 function trackInfo(metadata) {
     const suffix = metadata.artist ? ` — ${metadata.artist}` : '';
     return `${metadata.title}${suffix}`;
+}
+
+function playbackTrackIdentity(state) {
+    const stableTrackId = state.metadata.trackId?.trim();
+    return stableTrackId && stableTrackId !== MPRIS_NO_TRACK_ID
+        ? `${state.busName}\u0000${stableTrackId}`
+        : `${state.busName}\u0000${trackKey(state.metadata)}`;
+}
+
+function displayMetadataKey(metadata) {
+    return [metadata.title, metadata.artist, metadata.album].join('\u0000');
 }
 
 export default class MprisLyricsExtension extends Extension {
@@ -28,8 +41,10 @@ export default class MprisLyricsExtension extends Extension {
         this._enabled = true;
         this._lineTimerId = 0;
         this._wordTimerId = 0;
+        this._progressTimerId = 0;
         this._state = null;
         this._currentTrackKey = null;
+        this._currentTrackIdentity = null;
         this._lyricsDocument = null;
         this._lyricsLoaded = false;
         this._translationDocument = null;
@@ -69,6 +84,8 @@ export default class MprisLyricsExtension extends Extension {
             this._translationDisplayMode);
         this._indicator.setMaxPanelWidth(
             this._settings.get_int('max-panel-width'));
+        this._indicator.setShowIcon(
+            this._settings.get_boolean('show-icon'));
         this._indicator.setOffsets(0, this._globalOffsetMs);
         Main.panel.addToStatusArea(this.uuid, this._indicator.actor, 0, 'center');
 
@@ -87,6 +104,7 @@ export default class MprisLyricsExtension extends Extension {
         this._enabled = false;
         this._stopLineTimer();
         this._stopWordTimer();
+        this._stopProgressTimer();
         this._cancelTranslation();
 
         if (this._settings) {
@@ -115,6 +133,7 @@ export default class MprisLyricsExtension extends Extension {
         this._lyricsLoaded = false;
         this._translationDocument = null;
         this._currentTrackKey = null;
+        this._currentTrackIdentity = null;
         this._currentLyricIndex = -1;
         this._trackOffsetMs = 0;
         this._globalOffsetMs = 0;
@@ -131,7 +150,11 @@ export default class MprisLyricsExtension extends Extension {
                 this._settings.connect(`changed::${key}`, callback));
         };
 
-        connect('show-icon', () => this._updateIndicatorAndSchedule(true));
+        connect('show-icon', () => {
+            this._indicator?.setShowIcon(
+                this._settings.get_boolean('show-icon'));
+            this._updateIndicatorAndSchedule(true);
+        });
         connect('max-panel-width', () => {
             this._indicator?.setMaxPanelWidth(
                 this._settings.get_int('max-panel-width'));
@@ -217,10 +240,12 @@ export default class MprisLyricsExtension extends Extension {
         if (!this._enabled)
             return;
 
+        const previousState = this._state;
         this._state = state;
 
         if (!state) {
             this._currentTrackKey = null;
+            this._currentTrackIdentity = null;
             this._lyricsDocument = null;
             this._lyricsLoaded = false;
             this._translationDocument = null;
@@ -230,15 +255,18 @@ export default class MprisLyricsExtension extends Extension {
             this._cancelTranslation();
             this._stopLineTimer();
             this._stopWordTimer();
+            this._stopProgressTimer();
             this._indicator.clearTrack();
             this._indicator.setVisible(false);
             return;
         }
 
+        const identity = playbackTrackIdentity(state);
         const key = trackKey(state.metadata);
-        if (key !== this._currentTrackKey) {
+        if (identity !== this._currentTrackIdentity) {
             this._stopLineTimer();
             this._stopWordTimer();
+            this._currentTrackIdentity = identity;
             this._currentTrackKey = key;
             this._lyricsDocument = null;
             this._lyricsLoaded = false;
@@ -248,14 +276,16 @@ export default class MprisLyricsExtension extends Extension {
             this._indicator.setOffsets(
                 this._trackOffsetMs, this._globalOffsetMs);
             this._indicator.setText(this._panelText(trackInfo(state.metadata)));
-            this._indicator.setTrack(state.metadata);
+            this._indicator.setTrack(state.metadata, identity);
             this._indicator.setTranslation(null);
             this._indicator.setTranslationState('idle');
             this._cancelTranslation();
 
             const requestedKey = key;
+            const requestedIdentity = identity;
             this._lyricsProvider.fetch(state.metadata, document => {
-                if (!this._enabled || requestedKey !== this._currentTrackKey)
+                if (!this._enabled || requestedKey !== this._currentTrackKey ||
+                    requestedIdentity !== this._currentTrackIdentity)
                     return;
 
                 this._lyricsDocument = document;
@@ -264,16 +294,30 @@ export default class MprisLyricsExtension extends Extension {
                 this._updateIndicatorAndSchedule(true);
                 this._requestTranslation();
             });
+        } else {
+            const previousMetadata = previousState?.metadata;
+            if (!previousMetadata ||
+                displayMetadataKey(previousMetadata) !==
+                    displayMetadataKey(state.metadata))
+                this._indicator.updateMetadataDisplay(state.metadata);
+            if (!previousMetadata ||
+                previousMetadata.artUrl !== state.metadata.artUrl)
+                this._indicator.setArtwork(state.metadata.artUrl, identity);
         }
 
+        this._indicator.setProgress(
+            state.positionUs, state.metadata.durationUs);
         this._updateIndicatorAndSchedule(true);
     }
 
     _onPopupOpenChanged(open) {
-        if (open)
+        if (open) {
+            this._startProgressTimer();
             this._updateWordAndSchedule();
-        else
+        } else {
+            this._stopProgressTimer();
             this._stopWordTimer();
+        }
     }
 
     _onPlayersChanged(players) {
@@ -394,6 +438,41 @@ export default class MprisLyricsExtension extends Extension {
             return;
         GLib.source_remove(this._wordTimerId);
         this._wordTimerId = 0;
+    }
+
+    _stopProgressTimer() {
+        if (!this._progressTimerId)
+            return;
+        GLib.source_remove(this._progressTimerId);
+        this._progressTimerId = 0;
+    }
+
+    _startProgressTimer() {
+        this._updateProgress();
+        if (this._progressTimerId)
+            return;
+
+        this._progressTimerId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            PROGRESS_UPDATE_INTERVAL_MS,
+            () => {
+                if (!this._enabled || !this._indicator?.isPopupOpen()) {
+                    this._progressTimerId = 0;
+                    return GLib.SOURCE_REMOVE;
+                }
+                this._updateProgress();
+                return GLib.SOURCE_CONTINUE;
+            });
+        GLib.Source.set_name_by_id(
+            this._progressTimerId, '[mpris-lyrics] popup progress');
+    }
+
+    _updateProgress() {
+        if (!this._state || !this._indicator || !this._mprisManager)
+            return;
+        this._indicator.setProgress(
+            this._mprisManager.getPositionUs(),
+            this._state.metadata.durationUs);
     }
 
     _effectivePositionMs() {
@@ -526,9 +605,7 @@ export default class MprisLyricsExtension extends Extension {
     }
 
     _panelText(content) {
-        return this._settings.get_boolean('show-icon')
-            ? `♪ ${content}`
-            : content;
+        return content;
     }
 
     _adjustTrackOffset(deltaMs) {

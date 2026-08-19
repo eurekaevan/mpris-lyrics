@@ -1,6 +1,7 @@
 import GLib from 'gi://GLib';
 
-import {LrcParser, LyricsProvider} from '../lyrics.js';
+import {LyricsProvider} from '../lyrics.js';
+import {LyricsSynchronizer} from '../lyrics-synchronizer.js';
 import {MprisManager} from '../mpris.js';
 
 const loop = new GLib.MainLoop(null, false);
@@ -41,9 +42,12 @@ const manager = new MprisManager(state => {
     print(`durationUs=${state.metadata.durationUs}`);
     print(`positionUs=${Math.round(state.positionUs)}`);
 
-    provider.fetch(state.metadata, lines => {
-        print(`syncedLines=${lines?.length ?? 0}`);
-        print(`currentLine=${LrcParser.currentLine(lines, manager.getPositionUs()) ?? ''}`);
+    provider.fetch(state.metadata, document => {
+        const index = LyricsSynchronizer.currentLineIndex(
+            document, manager.getPositionUs() / 1000);
+        print(`syncLevel=${document?.syncLevel ?? 'missing'}`);
+        print(`lyricsLines=${document?.lines?.length ?? 0}`);
+        print(`currentLine=${document?.lines?.[index]?.text ?? ''}`);
         lyricsFinished = true;
         maybeFinish();
     });

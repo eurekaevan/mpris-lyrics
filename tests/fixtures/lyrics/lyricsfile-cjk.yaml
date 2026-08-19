@@ -1,0 +1,27 @@
+version: '1.0'
+metadata:
+  title: '星光'
+  artist: '测试歌手'
+  language: zh
+lines:
+  - text: '你好，世界！'
+    start_ms: 1000
+    end_ms: 3000
+    words:
+      - text: '你'
+        start_ms: 1000
+        end_ms: 1250
+      - text: '好'
+        start_ms: 1250
+        end_ms: 1500
+      - text: '，'
+        start_ms: 1500
+        end_ms: 1700
+      - text: '世界'
+        start_ms: 1700
+        end_ms: 2500
+      - text: '！'
+        start_ms: 2500
+        end_ms: 3000
+plain: |
+  你好，世界！

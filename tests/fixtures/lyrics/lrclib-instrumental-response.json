@@ -1,0 +1,11 @@
+{
+  "id": 310861,
+  "trackName": "Sweden",
+  "artistName": "C418",
+  "albumName": "Minecraft - Volume Alpha",
+  "duration": 216.0,
+  "instrumental": true,
+  "plainLyrics": null,
+  "syncedLyrics": null,
+  "lyricsfile": "version: '1.0'\nmetadata:\n  title: Sweden\n  artist: C418\n  album: Minecraft - Volume Alpha\n  duration_ms: 216000\n  instrumental: true\nlines: []\n"
+}

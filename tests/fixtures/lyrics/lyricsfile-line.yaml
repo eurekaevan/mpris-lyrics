@@ -1,0 +1,18 @@
+version: '1.0'
+metadata:
+  title: 'Line fixture'
+  artist: 'Fixture Artist'
+  language: en
+lines:
+  - text: 'Quoted: it''s safe & literal'
+    start_ms: 1000
+    end_ms: 2200
+  - text: ''
+    start_ms: 2200
+    end_ms: 2600
+  - text: 'Last line has no end'
+    start_ms: 2600
+plain: |-
+  Quoted: it's safe & literal
+
+  Last line has no end

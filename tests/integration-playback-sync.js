@@ -1,7 +1,8 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
-import {LrcParser, LyricsProvider} from '../lyrics.js';
+import {LyricsProvider} from '../lyrics.js';
+import {LyricsSynchronizer} from '../lyrics-synchronizer.js';
 import {MprisManager} from '../mpris.js';
 
 const MPRIS_PATH = '/org/mpris/MediaPlayer2';
@@ -34,7 +35,7 @@ async function control(busName, method, parameters = null) {
 const loop = new GLib.MainLoop(null, false);
 const provider = new LyricsProvider();
 let state = null;
-let lines = null;
+let document = null;
 let fetchedKey = null;
 let previousSample = null;
 let pausedAnchor = null;
@@ -64,10 +65,10 @@ const manager = new MprisManager(nextState => {
     ].join('\u0000');
     if (key !== fetchedKey) {
         fetchedKey = key;
-        lines = null;
+        document = null;
         provider.fetch(state.metadata, result => {
-            lines = result;
-            print(`lyrics-loaded=${lines?.length ?? 0}`);
+            document = result;
+            print(`lyrics-loaded=${document?.lines?.length ?? 0}`);
             maybeReady();
         });
     }
@@ -104,7 +105,9 @@ const sampleTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
         pausedAnchor = null;
     }
 
-    const line = LrcParser.currentLine(lines, positionUs) ?? '';
+    const index = LyricsSynchronizer.currentLineIndex(
+        document, positionUs / 1000);
+    const line = document?.lines?.[index]?.text ?? '';
     print(`sample=${state.playbackStatus},${Math.round(positionUs)},${line}`);
     previousSample = {positionUs, status: state.playbackStatus};
     return GLib.SOURCE_CONTINUE;

@@ -40,11 +40,17 @@ export class LyricsIndicator {
         onOffsetAdjust,
         onOffsetReset,
         onPlayerSelected,
+        onPopupOpenChanged,
     } = {}) {
         this._onOffsetAdjust = onOffsetAdjust ?? null;
         this._onOffsetReset = onOffsetReset ?? null;
         this._onPlayerSelected = onPlayerSelected ?? null;
+        this._onPopupOpenChanged = onPopupOpenChanged ?? null;
         this._lyricRows = [];
+        this._lyricLabels = [];
+        this._document = null;
+        this._wordSyncEnabled = true;
+        this._wordStateSignature = '';
         this._activeLyricIndex = -1;
         this._scrollLaterId = 0;
         this._laters = global.compositor.get_laters();
@@ -178,11 +184,12 @@ export class LyricsIndicator {
                 this._scheduleScrollToActive();
             else
                 this._cancelScheduledScroll();
+            this._onPopupOpenChanged?.(open);
         });
 
         this.setOffsets(0, 0);
         this.setPlayers([], 'auto');
-        this._showLyricsMessage('No synchronized lyrics found');
+        this._showLyricsMessage('No lyrics found');
     }
 
     setText(text) {
@@ -195,7 +202,7 @@ export class LyricsIndicator {
         this._artistLabel.text = metadata.artist;
         this._albumLabel.text = metadata.album;
         this._albumLabel.visible = Boolean(metadata.album);
-        this._showLyricsMessage('Loading synchronized lyrics…');
+        this._showLyricsMessage('Loading lyrics…');
     }
 
     clearTrack() {
@@ -203,17 +210,23 @@ export class LyricsIndicator {
         this._artistLabel.text = '';
         this._albumLabel.text = '';
         this._albumLabel.hide();
+        this._document = null;
         this._clearLyricsRows();
     }
 
-    setLyrics(lines) {
-        if (!lines?.length) {
-            this._showLyricsMessage('No synchronized lyrics found');
+    setLyrics(document) {
+        this._document = document ?? null;
+        if (document?.instrumental) {
+            this._showLyricsMessage('Instrumental track');
+            return;
+        }
+        if (!document?.lines?.length) {
+            this._showLyricsMessage('No lyrics found');
             return;
         }
 
         this._clearLyricsRows();
-        for (const line of lines) {
+        for (const line of document.lines) {
             const row = new PopupMenu.PopupBaseMenuItem({
                 style_class: 'mpris-lyrics-line',
                 reactive: false,
@@ -229,6 +242,7 @@ export class LyricsIndicator {
             row.add_child(label);
             this._lyricsBox.add_child(row);
             this._lyricRows.push(row);
+            this._lyricLabels.push(label);
         }
     }
 
@@ -239,14 +253,57 @@ export class LyricsIndicator {
         const previous = this._lyricRows[this._activeLyricIndex];
         previous?.remove_style_class_name('mpris-lyrics-line-active');
         previous?.remove_style_pseudo_class('selected');
+        if (this._activeLyricIndex >= 0)
+            this._resetLineText(this._activeLyricIndex);
 
         this._activeLyricIndex = index;
+        this._wordStateSignature = '';
         const current = this._lyricRows[index];
         current?.add_style_class_name('mpris-lyrics-line-active');
         current?.add_style_pseudo_class('selected');
 
         if (current && this.actor.menu.isOpen)
             this._scheduleScrollToActive();
+    }
+
+    setWordSyncEnabled(enabled) {
+        this._wordSyncEnabled = Boolean(enabled);
+        this._wordStateSignature = '';
+        if (!this._wordSyncEnabled && this._activeLyricIndex >= 0)
+            this._resetLineText(this._activeLyricIndex);
+    }
+
+    setCurrentWordStates(index, states) {
+        if (!this._wordSyncEnabled || index !== this._activeLyricIndex ||
+            this._document?.syncLevel !== 'word')
+            return;
+
+        const line = this._document.lines[index];
+        const label = this._lyricLabels[index];
+        if (!line?.words?.length || !label || states.length !== line.words.length)
+            return;
+
+        const signature = `${index}:${states.join(',')}`;
+        if (signature === this._wordStateSignature)
+            return;
+        this._wordStateSignature = signature;
+
+        const markup = line.words.map((word, wordIndex) => {
+            const text = GLib.markup_escape_text(word.text, -1);
+            switch (states[wordIndex]) {
+            case 'past':
+                return `<span alpha="85%">${text}</span>`;
+            case 'current':
+                return `<span weight="bold" underline="single">${text}</span>`;
+            default:
+                return `<span alpha="55%">${text}</span>`;
+            }
+        }).join('');
+        label.clutter_text.set_markup(markup);
+    }
+
+    isPopupOpen() {
+        return Boolean(this.actor?.menu?.isOpen);
     }
 
     setOffsets(trackOffsetMs, globalOffsetMs) {
@@ -331,8 +388,17 @@ export class LyricsIndicator {
         this._cancelScheduledScroll();
         this._lyricsBox.destroy_all_children();
         this._lyricRows = [];
+        this._lyricLabels = [];
         this._activeLyricIndex = -1;
+        this._wordStateSignature = '';
         this._messageLabel = null;
+    }
+
+    _resetLineText(index) {
+        const label = this._lyricLabels[index];
+        const line = this._document?.lines?.[index];
+        if (label && line)
+            label.clutter_text.set_text(line.text);
     }
 
     _scheduleScrollToActive() {
@@ -394,6 +460,7 @@ export class LyricsIndicator {
         this._onOffsetAdjust = null;
         this._onOffsetReset = null;
         this._onPlayerSelected = null;
+        this._onPopupOpenChanged = null;
         this.actor?.destroy();
         this.actor = null;
         this._label = null;
@@ -404,6 +471,8 @@ export class LyricsIndicator {
         this._scrollView = null;
         this._laters = null;
         this._lyricRows = [];
+        this._lyricLabels = [];
+        this._document = null;
         this._offsetLabel = null;
         this._effectiveOffsetLabel = null;
         this._decreaseButton = null;

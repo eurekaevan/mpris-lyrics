@@ -1,0 +1,7 @@
+version: '1.0'
+metadata:
+  title: 'Broken fixture'
+  artist: 'Fixture Artist'
+lines:
+  - text: 'Missing closing quote
+    start_ms: nope

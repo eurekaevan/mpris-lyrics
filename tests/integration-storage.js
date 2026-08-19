@@ -76,22 +76,33 @@ async function run() {
         cacheRoot: directRoot,
         positiveTtlMs: 100,
         negativeTtlMs: 50,
-        maxEntries: 2,
+        maxEntries: 3,
         now: () => now,
     });
     await diskCache.put(trackA, {
-        resultId: 7,
+        id: 7,
         syncedLyrics: '[00:01.00] cached A',
     });
     let cached = await diskCache.get(trackA);
-    assert(cached.hit && cached.lines?.[0]?.text === 'cached A' &&
-        cached.record.resultId === 7,
+    assert(cached.hit && cached.payload.syncedLyrics.includes('cached A') &&
+        cached.record.id === 7 && cached.record.version === 2,
     'a positive disk entry should retain raw lyrics and the LRCLIB ID');
 
-    await diskCache.put(trackB, {syncedLyrics: null});
+    await diskCache.put(trackB, null);
     cached = await diskCache.get(trackB);
-    assert(cached.hit && cached.lines === null && cached.record.negative,
+    assert(cached.hit && cached.payload === null && cached.record.negative,
         'a no-lyrics result should be a negative disk-cache hit');
+
+    await diskCache.put(trackC, {
+        id: 310861,
+        instrumental: true,
+        plainLyrics: null,
+        syncedLyrics: null,
+        lyricsfile: "version: '1.0'\nmetadata:\n  title: Sweden\n  artist: C418\n  instrumental: true\n",
+    });
+    cached = await diskCache.get(trackC);
+    assert(cached.hit && cached.payload.instrumental && !cached.record.negative,
+        'instrumental lyrics should be a positive cache entry');
 
     const trackAPath = GLib.build_filenamev([
         directRoot, 'lyrics', `${trackHash(trackA)}.json`,
@@ -99,6 +110,24 @@ async function run() {
     GLib.file_set_contents(trackAPath, '{broken json');
     cached = await diskCache.get(trackA);
     assert(!cached.hit, 'corrupt JSON should be treated as a safe miss');
+
+    GLib.file_set_contents(trackAPath, JSON.stringify({
+        version: 1,
+        trackHash: trackHash(trackA),
+        title: trackA.title,
+        artist: trackA.artist,
+        album: trackA.album,
+        durationUs: trackA.durationUs,
+        resultId: 17,
+        syncedLyrics: '[00:01.00] legacy cached line',
+        negative: false,
+        fetchedAt: now,
+        lastAccessed: now,
+    }));
+    cached = await diskCache.get(trackA);
+    assert(cached.hit && cached.payload.id === 17 &&
+        cached.payload.syncedLyrics.includes('legacy cached line'),
+    'a safe version 1 entry should remain readable as raw provider data');
 
     await diskCache.put(trackA, {syncedLyrics: '[00:01.00] fresh'});
     now += 101;
@@ -122,6 +151,26 @@ async function run() {
         (await evictionCache.get(trackB)).hit &&
         (await evictionCache.get(trackC)).hit,
     'disk eviction should remove the oldest entry above the size limit');
+
+    const malformedRoot = GLib.build_filenamev([tempRoot, 'malformed-cache']);
+    const malformedCache = new LyricsDiskCache({cacheRoot: malformedRoot});
+    await malformedCache.put(trackA, {
+        id: 99,
+        instrumental: false,
+        plainLyrics: 'plain fallback',
+        syncedLyrics: '[00:01.00] cached LRC fallback',
+        lyricsfile: "version: '1.0'\nmetadata: [broken",
+    });
+    const malformedProvider = new LyricsProvider({
+        apiUrl: 'not a valid URI',
+        cacheRoot: malformedRoot,
+        requestSpacingMs: 0,
+    });
+    const malformedDocument = await providerFetch(malformedProvider, trackA);
+    assert(malformedDocument?.source === 'lrclib-synced' &&
+        malformedDocument.lines[0].text === 'cached LRC fallback',
+    'a malformed cached Lyricsfile should fall back to cached syncedLyrics');
+    malformedProvider.destroy();
 
     const configRoot = GLib.build_filenamev([tempRoot, 'config']);
     let offsetNow = 100;
@@ -154,8 +203,9 @@ async function run() {
         timeoutSeconds: 2,
     };
     const firstProvider = new LyricsProvider(providerOptions);
-    const firstLines = await providerFetch(firstProvider, trackA);
-    assert(firstLines?.[0]?.text === 'persistent line' && networkRequests === 1,
+    const firstDocument = await providerFetch(firstProvider, trackA);
+    assert(firstDocument?.lines?.[0]?.text === 'persistent line' &&
+        networkRequests === 1,
         'the first provider load should use LRCLIB');
     const providerCachePath = GLib.build_filenamev([
         providerRoot, 'lyrics', `${trackHash(trackA)}.json`,
@@ -164,8 +214,9 @@ async function run() {
     firstProvider.destroy();
 
     const secondProvider = new LyricsProvider(providerOptions);
-    const diskLines = await providerFetch(secondProvider, trackA);
-    assert(diskLines?.[0]?.text === 'persistent line' && networkRequests === 1,
+    const diskDocument = await providerFetch(secondProvider, trackA);
+    assert(diskDocument?.lines?.[0]?.text === 'persistent line' &&
+        networkRequests === 1,
         'provider recreation should use L2 without another LRCLIB request');
 
     const noLyricsTrack = {...trackA, title: 'No Lyrics'};
@@ -186,7 +237,8 @@ async function run() {
     await clearLyricsCache(providerRoot);
     await thirdProvider.clearCaches();
     const afterClear = await providerFetch(thirdProvider, trackA);
-    assert(afterClear?.[0]?.text === 'persistent line' && networkRequests === 3,
+    assert(afterClear?.lines?.[0]?.text === 'persistent line' &&
+        networkRequests === 3,
         'clearing L1 and L2 should force the next LRCLIB request');
     thirdProvider.destroy();
 

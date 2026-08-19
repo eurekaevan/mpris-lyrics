@@ -1,3 +1,5 @@
+import GLib from 'gi://GLib';
+
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Scripting from 'resource:///org/gnome/shell/ui/scripting.js';
 
@@ -30,6 +32,7 @@ export async function run() {
         settings.get_int('max-panel-width') === 500 &&
         !settings.get_boolean('hide-when-paused') &&
         settings.get_boolean('fallback-track-info') &&
+        settings.get_boolean('word-sync-enabled') &&
         settings.get_int('global-offset-ms') === 0 &&
         settings.get_string('preferred-player') === 'auto',
     'the packaged GSettings schema should expose the Phase 3 defaults');
@@ -42,10 +45,20 @@ export async function run() {
         album: 'Test Album',
     });
     const lines = Array.from({length: 30}, (_unused, index) => ({
-        timeUs: index * 1_000_000,
+        startMs: index * 1000,
+        endMs: null,
+        words: [],
         text: `Synchronized lyric line ${index + 1} with wrapping text`,
     }));
-    view.setLyrics(lines);
+    const lineDocument = {
+        source: 'test',
+        sourceId: null,
+        instrumental: false,
+        metadata: {},
+        syncLevel: 'line',
+        lines,
+    };
+    view.setLyrics(lineDocument);
     const originalRows = [...view._lyricRows];
     view.setCurrentLyricIndex(20);
     view.setText('♪ Synchronized lyric line 21 with wrapping text');
@@ -85,6 +98,53 @@ export async function run() {
         'mpris-lyrics-line-active'),
         'the new row should gain the active class');
 
+    const markupText = '<b>safe</b> & שלום 世界!';
+    const wordDocument = {
+        source: 'test',
+        sourceId: null,
+        instrumental: false,
+        metadata: {},
+        syncLevel: 'word',
+        lines: [{
+            text: markupText,
+            startMs: 0,
+            endMs: 3000,
+            words: [
+                {text: '<b>safe</b> ', startMs: 0, endMs: 1000},
+                {text: '& ', startMs: 1000, endMs: 1500},
+                {text: 'שלום ', startMs: 1500, endMs: 2200},
+                {text: '世界!', startMs: 2200, endMs: 3000},
+            ],
+        }],
+    };
+    view.setLyrics(wordDocument);
+    view.setCurrentLyricIndex(0);
+    view.setCurrentWordStates(0, ['past', 'current', 'future', 'future']);
+    assert(view._lyricLabels[0].clutter_text.get_text() === markupText,
+        'word highlighting must escape lyric text instead of injecting markup');
+    const wordLabel = view._lyricLabels[0];
+    view.setCurrentWordStates(0, ['past', 'past', 'current', 'future']);
+    assert(view._lyricLabels[0] === wordLabel,
+        'a word change should update only the current line label');
+
+    const longDocument = {
+        ...lineDocument,
+        syncLevel: 'none',
+        lines: Array.from({length: 350}, (_unused, index) => ({
+            text: `Static long-lyrics line ${index + 1}`,
+            startMs: null,
+            endMs: null,
+            words: [],
+        })),
+    };
+    const longLyricsStartUs = GLib.get_monotonic_time();
+    view.setLyrics(longDocument);
+    const longLyricsBuildMs =
+        (GLib.get_monotonic_time() - longLyricsStartUs) / 1000;
+    assert(view._lyricRows.length === 350 && longLyricsBuildMs < 1500,
+        '350 static lines should build without an obvious Shell stall');
+    print(`longLyricsBuildMs=${longLyricsBuildMs.toFixed(1)}`);
+
     const realMprisManager = instance._mprisManager;
     const realOffsetStore = instance._offsetStore;
     const realLyricsProvider = instance._lyricsProvider;
@@ -117,8 +177,11 @@ export async function run() {
         },
     ];
     let appliedPreference = 'auto';
+    let fakePositionUs = 1_750_000;
     instance._mprisManager = {
-        getPositionUs: () => 1_750_000,
+        getPositionUs: () => fakePositionUs,
+        getDelayUntilPositionUs: targetUs =>
+            Math.max(1, (targetUs - fakePositionUs) / 1000),
         getPlayers: () => availablePlayers,
         setPreferredPlayer: value => (appliedPreference = value),
     };
@@ -129,20 +192,59 @@ export async function run() {
         durationUs: 180_000_000,
     };
     const offsetLines = [
-        {timeUs: 1_000_000, text: 'First'},
-        {timeUs: 2_000_000, text: 'Second'},
-        {timeUs: 3_000_000, text: 'Third'},
+        {startMs: 1000, endMs: null, words: [], text: 'First'},
+        {startMs: 2000, endMs: null, words: [], text: 'Second'},
+        {startMs: 3000, endMs: null, words: [], text: 'Third'},
     ];
+    const offsetDocument = {
+        source: 'test',
+        sourceId: null,
+        instrumental: false,
+        metadata: {},
+        syncLevel: 'line',
+        lines: offsetLines,
+    };
     instance._state = {
         playbackStatus: 'Paused',
         metadata: offsetMetadata,
     };
-    instance._lyrics = offsetLines;
+    instance._lyricsDocument = offsetDocument;
     instance._lyricsLoaded = true;
     instance._trackOffsetMs = 0;
     instance._currentLyricIndex = -1;
+
+    instance._state = {
+        playbackStatus: 'Playing',
+        metadata: offsetMetadata,
+    };
+    instance._lyricsDocument = wordDocument;
     view.setTrack(offsetMetadata);
-    view.setLyrics(offsetLines);
+    view.setLyrics(wordDocument);
+    instance._updateIndicatorAndSchedule(true);
+    assert(instance._wordTimerId !== 0 && view._label.text === `♪ ${markupText}`,
+        'an open popup should arm one next-boundary word timer');
+    fakePositionUs = 2_250_000;
+    instance._updateWordAndSchedule();
+    assert(view._label.text === `♪ ${markupText}`,
+        'word changes must not update the top-bar label');
+    indicator.menu.close();
+    assert(instance._wordTimerId === 0,
+        'closing the popup should stop the word timer immediately');
+    indicator.menu.open();
+    assert(instance._wordTimerId !== 0,
+        'opening the popup should recompute and re-arm the current word');
+
+    fakePositionUs = 1_750_000;
+    view.setTrack(offsetMetadata);
+    view.setLyrics(offsetDocument);
+    instance._state = {
+        playbackStatus: 'Paused',
+        metadata: offsetMetadata,
+    };
+    instance._lyricsDocument = offsetDocument;
+    instance._updateIndicatorAndSchedule(true);
+    assert(instance._wordTimerId === 0,
+        'pause should cancel the word timer');
     const offsetRows = [...view._lyricRows];
     instance._updateIndicatorAndSchedule(true);
     assert(instance._currentLyricIndex === 0,
@@ -191,6 +293,11 @@ export async function run() {
     assert(view._label.text === '♪ First',
         'show-icon should immediately restore the music note');
 
+    settings.set_boolean('word-sync-enabled', false);
+    assert(!instance._wordSyncEnabled && instance._wordTimerId === 0,
+        'disabling word sync should immediately stop its boundary timer');
+    settings.set_boolean('word-sync-enabled', true);
+
     settings.set_int('max-panel-width', 640);
     assert(view._label.get_style().includes('640px'),
         'maximum panel width should update without extension restart');
@@ -218,7 +325,7 @@ export async function run() {
     assert(runtimeCacheClears === 1,
         'cache generation changes should clear the running L1/L2 instance');
 
-    instance._lyrics = null;
+    instance._lyricsDocument = null;
     instance._lyricsLoaded = true;
     view.setLyrics(null);
     instance._updateIndicatorAndSchedule(true);
@@ -231,11 +338,28 @@ export async function run() {
     assert(indicator.visible,
         're-enabling fallback information should restore the indicator');
 
+    const plainDocument = {
+        source: 'test-plain',
+        sourceId: null,
+        instrumental: false,
+        metadata: {},
+        syncLevel: 'none',
+        lines: [{text: 'Static lyrics', startMs: null, endMs: null, words: []}],
+    };
+    instance._lyricsDocument = plainDocument;
+    view.setLyrics(plainDocument);
+    settings.set_boolean('fallback-track-info', false);
+    assert(indicator.visible && instance._currentLyricIndex === -1 &&
+        view._label.text === '♪ Offset Test — Paused Artist',
+    'plain lyrics should keep a static popup entry without pretending to sync');
+    settings.set_boolean('fallback-track-info', true);
+    instance._lyricsDocument = null;
+
     view.setTrack({title: 'No Lyrics Track', artist: 'Another Artist', album: ''});
     view.setLyrics(null);
     assert(view._lyricRows.length === 0 &&
-        view._messageLabel.text === 'No synchronized lyrics found',
-        'the popup should show the no-synchronized-lyrics result');
+        view._messageLabel.text === 'No lyrics found',
+        'the popup should show the no-lyrics result');
     assert(!view._albumLabel.visible,
         'an absent album should not leave an empty metadata row');
     assert(view._titleLabel.text === 'No Lyrics Track' &&
@@ -243,7 +367,7 @@ export async function run() {
         'the no-lyrics state should retain title and artist');
 
     instance._state = null;
-    instance._lyrics = null;
+    instance._lyricsDocument = null;
     instance._mprisManager = realMprisManager;
     instance._offsetStore = realOffsetStore;
     instance._lyricsProvider = realLyricsProvider;
@@ -257,8 +381,9 @@ export async function run() {
     assert(!Main.panel.statusArea[UUID],
         'disable() did not destroy the panel indicator');
     assert(instance._settings === null &&
-        instance._settingsSignalIds.length === 0,
-    'disable() should disconnect and release runtime settings');
+        instance._settingsSignalIds.length === 0 &&
+        instance._lineTimerId === 0 && instance._wordTimerId === 0,
+    'disable() should disconnect settings and remove line/word timers');
 }
 
 export function finish() {

@@ -3,7 +3,8 @@
 MPRIS Lyrics 是一个面向 GNOME Shell 50 的极简扩展。它自动发现会话总线上的
 `org.mpris.MediaPlayer2.*` 播放器，从 MPRIS 元数据查询 LRCLIB，并在顶部状态栏
 显示当前一句同步歌词。点击歌词会打开 Shell 原生 popup，其中包含歌曲信息、可滚动
-的完整同步歌词、当前行高亮、逐歌曲时间偏移和播放器选择。
+歌词、逐行/逐词高亮、逐歌曲时间偏移和播放器选择。歌词统一归一化为
+`LyricsDocument`，来源可以是 LRCLIB Lyricsfile、LRC 或 plain lyrics。
 
 它不调用 `playerctl`，不使用 Spotify Web API、OAuth 或 Spotify track ID。Firefox
 中的 Spotify Web 和暴露标准 MPRIS 的 Spotify Linux 客户端走同一条数据路径。
@@ -65,6 +66,13 @@ Play/Pause/Resume 和前后 Seek，验证 monotonic 推算、暂停冻结和跳�
 gjs -m tests/integration-live-player-policy.js
 ```
 
+读取当前 LRCLIB 的一个 word、一个 plain-only 和一个 instrumental 记录，并只输出
+解析统计（不输出歌词正文）：
+
+```sh
+gjs -m tests/integration-live-lyricsfile.js
+```
+
 安装态 Preferences 的自动打开与控件类型检查：
 
 ```sh
@@ -94,48 +102,66 @@ Fish 用户可直接运行上述命令；Makefile 内部使用 `make` 自己的�
 
 ## 结构
 
-- `extension.js`：生命周期、GSettings、effective offset 与歌词/UI 协调、逐时间戳的
-  一次性定时器。
+- `extension.js`：生命周期、GSettings、effective offset 与歌词/UI 协调、line/word
+  时间边界的一次性定时器。
 - `mpris.js`：播放器发现、稳定 Identity/DesktopEntry policy、D-Bus 信号、Position
   单次校准和 monotonic 推算。
-- `lyrics.js`：LRCLIB 异步请求、取消、限速/429 重试，以及 memory/disk cache 分层。
-- `lyrics-parser.js`：LRC 解析和当前行二分查找。
-- `storage.js`：SHA-256 track key、异步 JSON disk cache、per-track offset store。
-- `indicator.js`：`PanelMenu` popup、歌曲信息、歌词 row、高亮、滚动、offset 和播放器控件。
+- `lyrics.js`：LRCLIB `/api/get`、404 后的 `/api/search`、取消、coalescing、限速/429，
+  以及 memory/disk cache 分层。
+- `lyrics-document.js`、`lyrics-normalizer.js`：统一模型、sync-level validation 和
+  Lyricsfile → LRC → plain 的安全 fallback。
+- `lyricsfile-parser.js`、`lyrics-parser.js`：Lyricsfile YAML 与 LRC 解析。
+- `lyrics-matcher.js`：title/artist/album/duration/同步质量的候选评分和可信阈值。
+- `lyrics-synchronizer.js`：当前行、word 状态和下一时间边界计算。
+- `storage.js`：SHA-256 track key、cache schema v2 原始 provider payload、v1 兼容和
+  per-track offset store。
+- `indicator.js`：`PanelMenu` popup、静态/逐行/逐词显示、滚动、offset 和播放器控件。
 - `prefs.js`、`schemas/`：GTK4/Libadwaita Preferences 和正式 GSettings schema。
+- `js-yaml.mjs`、`LICENSE.js-yaml`：随扩展打包的 js-yaml 4.1.0 readable ESM 与
+  MIT license；`README.js-yaml.md` 记录固定 SHA-256 和可重复取得方式。
 
 没有周期性 polling。播放器发现使用 `NameOwnerChanged`，状态更新使用
-`PropertiesChanged`，跳转使用 `Seeked`；歌词显示只为下一条时间戳安排一次性本地
-timer。暂停、恢复和换歌时会单次读取 Position 重新校准，Seeked 信号直接提供新的
-Position 锚点。
+`PropertiesChanged`，跳转使用 `Seeked`；歌词显示只为下一行或 popup 中下一 word
+边界安排一次性本地 timer。popup 关闭、暂停、换歌或 disable 时 word timer 会移除。
+暂停、恢复和换歌时会单次读取 Position 重新校准，Seeked 信号直接提供新的 Position
+锚点。
 
-歌词加载后会为每个 parsed LRC entry 创建一次 row。推进时只移除上一行的 active
-style、设置新行的 active style，并更新顶栏。popup 打开时，下一次歌词变化会把新行
-直接滚动到 viewport 中央附近；popup 关闭时不执行滚动布局。
+歌词加载后会为每个 `LyricsLine` 创建一次 row。逐词推进只重设当前行 label 的安全
+Pango markup；歌词文本先经 `GLib.markup_escape_text()`，不能注入 markup。只有换行
+才滚动并更新顶栏，word 变化不会触发顶栏 layout 或重复滚动。
 
 ## 行为
 
-- 有同步歌词时显示 `♪ 当前歌词`。
-- 查询中、无同步歌词、歌词开始前以及 LRC 的空白时间标签处显示
+- 有逐行或逐词歌词时，顶栏都只显示 `♪ 当前整句歌词`。
+- Lyricsfile 的 word timing 只影响 popup；当前 word 使用 inherited theme foreground、
+  underline/weight 和 alpha 区分已唱、当前、未唱，不使用固定鲜艳颜色。
+- instrumental 显示 `♪ Instrumental`，popup 显示 `Instrumental track`，并作为
+  positive cache 保存。
+- plain lyrics 作为静态内容显示，不自动滚动，也不伪造时间戳。
+- 查询中、无歌词、歌词开始前以及 LRC 的空白时间标签处显示
   `♪ Title — Artist`。
-- popup 始终保留 title / artist，album 存在时显示；无同步歌词时显示
-  `No synchronized lyrics found`。
+- popup 始终保留 title / artist，album 存在时显示；无歌词时显示 `No lyrics found`。
 - popup 的 `-0.5s`、`+0.5s` 和 `Reset` 控制当前歌曲 offset，范围为 -10s 到 +10s；
   Preferences 单独控制全局 offset。最终位置为
   `playbackPosition + globalOffset + trackOffset`。
 - 每首歌 offset 使用 track metadata 的 SHA-256 key，保存到
   `$XDG_CONFIG_HOME/mpris-lyrics/offsets.json`，最多保留最近使用的 500 条。
-- 成功同步歌词和 no-lyrics 结果先进入 100 首 memory LRU，再写入
+- positive LyricsDocument 和 no-lyrics 结果先进入 100 首 memory LRU；disk cache v2
+  保存 LRCLIB id、instrumental、plainLyrics、syncedLyrics、lyricsfile、fetchedAt 和
+  lastAccessed 原始字段，加载时重新解析。version 1 的安全 LRC 记录仍可读取。缓存位于
   `$XDG_CACHE_HOME/mpris-lyrics/lyrics/<sha256>.json`。positive cache 有效 30 天，
   negative cache 有效 24 小时，disk cache 最多 500 条。
 - Auto 优先状态为 `Playing` 的播放器；preferred player 使用 DesktopEntry、其次
   Identity 匹配。preferred 不存在时临时回退 Auto，重新出现后自动恢复。
 - 播放器全部消失或没有有效标题时隐藏面板项。
-- LRCLIB 请求仅携带 title、artist、album 和以秒为单位的 duration。
+- `/api/get` 携带 title、artist、album 和秒级 duration；仅在 404 后使用 structured
+  `/api/search`，再以 title/artist/album/duration 和同步质量评分，低于阈值不采用。
+- 所有请求使用 `MPRIS Lyrics/4.0 (mpris-lyrics@eureka)` User-Agent，顺序发送并间隔
+  300ms；429 最多重试一次且尊重 `Retry-After`。
 
 正式 settings keys：`show-icon`、`max-panel-width`、`hide-when-paused`、
-`fallback-track-info`、`global-offset-ms`、`preferred-player`，以及用于跨进程通知清理
-memory cache 的内部 `cache-clear-generation`。
+`fallback-track-info`、`word-sync-enabled`、`global-offset-ms`、`preferred-player`，
+以及用于跨进程通知清理 memory cache 的内部 `cache-clear-generation`。
 
 ## 上游接口
 
@@ -143,3 +169,4 @@ memory cache 的内部 `cache-clear-generation`。
 - [GNOME Shell 50 移植说明](https://gjs.guide/extensions/upgrading/gnome-shell-50.html)
 - [MPRIS 2.2 Player 接口](https://specifications.freedesktop.org/mpris/latest/Player_Interface.html)
 - [LRCLIB API](https://lrclib.net/docs)
+- [Lyricsfile 1.0 Draft Specification](https://github.com/tranxuanthang/lyricsfile/blob/main/SPECIFICATION.md)

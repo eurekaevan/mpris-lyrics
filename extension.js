@@ -4,7 +4,9 @@ import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {LyricsIndicator} from './indicator.js';
-import {LrcParser, LyricsProvider} from './lyrics.js';
+import {LyricsProvider} from './lyrics.js';
+import {SyncLevel} from './lyrics-document.js';
+import {LyricsSynchronizer} from './lyrics-synchronizer.js';
 import {MprisManager} from './mpris.js';
 import {OffsetStore, trackKey} from './storage.js';
 
@@ -19,10 +21,11 @@ function trackInfo(metadata) {
 export default class MprisLyricsExtension extends Extension {
     enable() {
         this._enabled = true;
-        this._timerId = 0;
+        this._lineTimerId = 0;
+        this._wordTimerId = 0;
         this._state = null;
         this._currentTrackKey = null;
-        this._lyrics = null;
+        this._lyricsDocument = null;
         this._lyricsLoaded = false;
         this._currentLyricIndex = -1;
         this._trackOffsetMs = 0;
@@ -30,6 +33,7 @@ export default class MprisLyricsExtension extends Extension {
 
         this._settings = this.getSettings();
         this._globalOffsetMs = this._settings.get_int('global-offset-ms');
+        this._wordSyncEnabled = this._settings.get_boolean('word-sync-enabled');
         this._connectSettings();
 
         this._offsetStore = new OffsetStore({
@@ -42,7 +46,9 @@ export default class MprisLyricsExtension extends Extension {
             onPlayerSelected: stableId => {
                 this._settings?.set_string('preferred-player', stableId);
             },
+            onPopupOpenChanged: open => this._onPopupOpenChanged(open),
         });
+        this._indicator.setWordSyncEnabled(this._wordSyncEnabled);
         this._indicator.setMaxPanelWidth(
             this._settings.get_int('max-panel-width'));
         this._indicator.setOffsets(0, this._globalOffsetMs);
@@ -60,7 +66,8 @@ export default class MprisLyricsExtension extends Extension {
 
     disable() {
         this._enabled = false;
-        this._stopTimer();
+        this._stopLineTimer();
+        this._stopWordTimer();
 
         if (this._settings) {
             for (const id of this._settingsSignalIds)
@@ -81,12 +88,13 @@ export default class MprisLyricsExtension extends Extension {
         this._indicator = null;
 
         this._state = null;
-        this._lyrics = null;
+        this._lyricsDocument = null;
         this._lyricsLoaded = false;
         this._currentTrackKey = null;
         this._currentLyricIndex = -1;
         this._trackOffsetMs = 0;
         this._globalOffsetMs = 0;
+        this._wordSyncEnabled = false;
         this._settings = null;
     }
 
@@ -105,6 +113,15 @@ export default class MprisLyricsExtension extends Extension {
             this._updateIndicatorAndSchedule(true));
         connect('fallback-track-info', () =>
             this._updateIndicatorAndSchedule(true));
+        connect('word-sync-enabled', () => {
+            this._wordSyncEnabled =
+                this._settings.get_boolean('word-sync-enabled');
+            this._indicator?.setWordSyncEnabled(this._wordSyncEnabled);
+            if (this._wordSyncEnabled)
+                this._updateWordAndSchedule();
+            else
+                this._stopWordTimer();
+        });
         connect('global-offset-ms', () => {
             this._globalOffsetMs = this._settings.get_int('global-offset-ms');
             this._indicator?.setOffsets(
@@ -132,12 +149,13 @@ export default class MprisLyricsExtension extends Extension {
 
         if (!state) {
             this._currentTrackKey = null;
-            this._lyrics = null;
+            this._lyricsDocument = null;
             this._lyricsLoaded = false;
             this._currentLyricIndex = -1;
             this._trackOffsetMs = 0;
             this._lyricsProvider.cancelPending();
-            this._stopTimer();
+            this._stopLineTimer();
+            this._stopWordTimer();
             this._indicator.clearTrack();
             this._indicator.setVisible(false);
             return;
@@ -145,8 +163,10 @@ export default class MprisLyricsExtension extends Extension {
 
         const key = trackKey(state.metadata);
         if (key !== this._currentTrackKey) {
+            this._stopLineTimer();
+            this._stopWordTimer();
             this._currentTrackKey = key;
-            this._lyrics = null;
+            this._lyricsDocument = null;
             this._lyricsLoaded = false;
             this._currentLyricIndex = -1;
             this._trackOffsetMs = this._offsetStore.get(state.metadata);
@@ -156,18 +176,25 @@ export default class MprisLyricsExtension extends Extension {
             this._indicator.setTrack(state.metadata);
 
             const requestedKey = key;
-            this._lyricsProvider.fetch(state.metadata, lines => {
+            this._lyricsProvider.fetch(state.metadata, document => {
                 if (!this._enabled || requestedKey !== this._currentTrackKey)
                     return;
 
-                this._lyrics = lines;
+                this._lyricsDocument = document;
                 this._lyricsLoaded = true;
-                this._indicator.setLyrics(lines);
+                this._indicator.setLyrics(document);
                 this._updateIndicatorAndSchedule(true);
             });
         }
 
         this._updateIndicatorAndSchedule(true);
+    }
+
+    _onPopupOpenChanged(open) {
+        if (open)
+            this._updateWordAndSchedule();
+        else
+            this._stopWordTimer();
     }
 
     _onPlayersChanged(players) {
@@ -188,16 +215,27 @@ export default class MprisLyricsExtension extends Extension {
         this._updateIndicatorAndSchedule(true);
     }
 
-    _stopTimer() {
-        if (!this._timerId)
+    _stopLineTimer() {
+        if (!this._lineTimerId)
             return;
+        GLib.source_remove(this._lineTimerId);
+        this._lineTimerId = 0;
+    }
 
-        GLib.source_remove(this._timerId);
-        this._timerId = 0;
+    _stopWordTimer() {
+        if (!this._wordTimerId)
+            return;
+        GLib.source_remove(this._wordTimerId);
+        this._wordTimerId = 0;
+    }
+
+    _effectivePositionMs() {
+        return this._mprisManager.getPositionUs() / 1000 +
+            this._globalOffsetMs + this._trackOffsetMs;
     }
 
     _updateIndicatorAndSchedule(forceText = false) {
-        this._stopTimer();
+        this._stopLineTimer();
 
         if (!this._state || !this._indicator)
             return;
@@ -207,14 +245,18 @@ export default class MprisLyricsExtension extends Extension {
         let panelContent = fallbackEnabled
             ? trackInfo(this._state.metadata)
             : null;
-        let nextLineTimeUs = null;
-        if (this._lyrics) {
-            const positionUs = this._mprisManager.getPositionUs();
-            const effectivePositionUs = positionUs +
-                (this._globalOffsetMs + this._trackOffsetMs) * 1000;
-            const index = LrcParser.currentIndex(
-                this._lyrics, effectivePositionUs);
-            const line = index >= 0 ? this._lyrics[index].text : null;
+        let nextLineStartMs = null;
+        const document = this._lyricsDocument;
+        const effectivePositionMs = this._effectivePositionMs();
+
+        if (document?.instrumental) {
+            panelContent = 'Instrumental';
+            this._currentLyricIndex = -1;
+            this._indicator.setCurrentLyricIndex(-1);
+        } else if (document && document.syncLevel !== SyncLevel.NONE) {
+            const index = LyricsSynchronizer.currentLineIndex(
+                document, effectivePositionMs);
+            const line = index >= 0 ? document.lines[index].text : null;
             if (line)
                 panelContent = line;
 
@@ -222,8 +264,17 @@ export default class MprisLyricsExtension extends Extension {
                 this._currentLyricIndex = index;
                 this._indicator.setCurrentLyricIndex(index);
             }
-
-            nextLineTimeUs = this._lyrics[index + 1]?.timeUs ?? null;
+            nextLineStartMs = LyricsSynchronizer.nextLineStartMs(
+                document, index);
+        } else if (document?.lines?.length) {
+            // Static lyrics still need an entry point to their popup. They do
+            // not masquerade as synchronized text in the panel.
+            panelContent = trackInfo(this._state.metadata);
+            this._currentLyricIndex = -1;
+            this._indicator.setCurrentLyricIndex(-1);
+        } else {
+            this._currentLyricIndex = -1;
+            this._indicator.setCurrentLyricIndex(-1);
         }
 
         if (panelContent)
@@ -232,31 +283,72 @@ export default class MprisLyricsExtension extends Extension {
         const hiddenWhilePaused =
             this._settings.get_boolean('hide-when-paused') &&
             this._state.playbackStatus === 'Paused';
-        const hasDisplayContent = Boolean(panelContent);
-        this._indicator.setVisible(hasDisplayContent && !hiddenWhilePaused);
+        this._indicator.setVisible(Boolean(panelContent) && !hiddenWhilePaused);
+
+        this._updateWordAndSchedule(effectivePositionMs);
 
         if (this._state.playbackStatus !== 'Playing' ||
-            nextLineTimeUs === null)
+            nextLineStartMs === null)
             return;
 
-        const playbackTargetUs = nextLineTimeUs -
-            (this._globalOffsetMs + this._trackOffsetMs) * 1000;
+        const playbackTargetUs = (nextLineStartMs -
+            this._globalOffsetMs - this._trackOffsetMs) * 1000;
         const delayMs = this._mprisManager
             .getDelayUntilPositionUs(playbackTargetUs);
         if (delayMs === null || !Number.isFinite(delayMs))
             return;
 
-        this._timerId = GLib.timeout_add(
+        this._lineTimerId = GLib.timeout_add(
             GLib.PRIORITY_DEFAULT,
             Math.max(1, Math.ceil(delayMs)),
             () => {
-                this._timerId = 0;
+                this._lineTimerId = 0;
                 if (this._enabled)
                     this._updateIndicatorAndSchedule();
                 return GLib.SOURCE_REMOVE;
             });
         GLib.Source.set_name_by_id(
-            this._timerId, '[mpris-lyrics] next lyric line');
+            this._lineTimerId, '[mpris-lyrics] next lyric line');
+    }
+
+    _updateWordAndSchedule(effectivePositionMs = null) {
+        this._stopWordTimer();
+        if (!this._state || !this._indicator || !this._wordSyncEnabled ||
+            !this._indicator.isPopupOpen() ||
+            this._lyricsDocument?.syncLevel !== SyncLevel.WORD ||
+            this._currentLyricIndex < 0)
+            return;
+
+        const positionMs = effectivePositionMs ?? this._effectivePositionMs();
+        const states = LyricsSynchronizer.wordStates(
+            this._lyricsDocument, this._currentLyricIndex, positionMs);
+        this._indicator.setCurrentWordStates(this._currentLyricIndex, states);
+
+        if (this._state.playbackStatus !== 'Playing')
+            return;
+        const nextBoundaryMs = LyricsSynchronizer.nextWordBoundaryMs(
+            this._lyricsDocument, this._currentLyricIndex, positionMs);
+        if (nextBoundaryMs === null)
+            return;
+
+        const playbackTargetUs = (nextBoundaryMs -
+            this._globalOffsetMs - this._trackOffsetMs) * 1000;
+        const delayMs = this._mprisManager
+            .getDelayUntilPositionUs(playbackTargetUs);
+        if (delayMs === null || !Number.isFinite(delayMs))
+            return;
+
+        this._wordTimerId = GLib.timeout_add(
+            GLib.PRIORITY_DEFAULT,
+            Math.max(1, Math.ceil(delayMs)),
+            () => {
+                this._wordTimerId = 0;
+                if (this._enabled)
+                    this._updateWordAndSchedule();
+                return GLib.SOURCE_REMOVE;
+            });
+        GLib.Source.set_name_by_id(
+            this._wordTimerId, '[mpris-lyrics] next lyric word boundary');
     }
 
     _panelText(content) {

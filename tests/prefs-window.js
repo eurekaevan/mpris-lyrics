@@ -67,8 +67,8 @@ application.connect('activate', async app => {
                     'the preferences window did not provide a visible page');
                 const widgets = descendants(window);
                 assert(widgets.filter(widget => widget instanceof Adw.SwitchRow)
-                    .length === 3,
-                'preferences should contain three boolean SwitchRows');
+                    .length === 4,
+                'preferences should contain four boolean SwitchRows');
                 assert(widgets.filter(widget => widget instanceof Adw.SpinRow)
                     .length === 2,
                 'preferences should contain width and global-offset SpinRows');

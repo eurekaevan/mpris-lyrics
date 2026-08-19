@@ -63,6 +63,11 @@ export default class MprisLyricsPreferences extends ExtensionPreferences {
             settings,
             'fallback-track-info',
             'Show title when lyrics are unavailable'));
+        lyricsGroup.add(bindSwitch(
+            settings,
+            'word-sync-enabled',
+            'Word-synced highlighting',
+            'Highlight the current word when timing is available'));
 
         const globalOffsetRow = new Adw.SpinRow({
             title: 'Global lyrics offset',

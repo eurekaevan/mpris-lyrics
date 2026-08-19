@@ -100,10 +100,11 @@ async function runScenario() {
 
     try {
         const firstLyrics = await fetchLyrics(first.metadata);
-        assert(firstLyrics?.length > 0,
+        assert(firstLyrics?.lines?.length > 0,
             'track A should have synchronized lyrics for this live test');
-        assert(networkRequests === 1,
-            'the first track should perform one LRCLIB request');
+        const requestsAfterA = networkRequests;
+        assert(requestsAfterA <= 2,
+            'track A should use get plus at most one search (or a disk hit)');
 
         await control(original.busName, 'Next');
         const second = await waitForState(current =>
@@ -117,8 +118,8 @@ async function runScenario() {
         print(`trackB=${second.metadata.title}`);
         print(`trackBArtist=${second.metadata.artist}`);
         print(`networkRequestsAfterB=${networkRequests}`);
-        assert(networkRequests === 2,
-            'track B should perform one additional LRCLIB request');
+        assert(networkRequests - requestsAfterA <= 2,
+            'track B should use get plus at most one additional search');
 
         await control(original.busName, 'SetPosition',
             new GLib.Variant('(ox)', [second.metadata.trackId, 0]));
@@ -129,11 +130,11 @@ async function runScenario() {
         const returnedLyrics = await fetchLyrics(returned.metadata);
         assert(networkRequests === requestsBeforeReturn,
             'returning to A should be a cache hit without another request');
-        assert(returnedLyrics?.length === firstLyrics.length,
+        assert(returnedLyrics?.lines?.length === firstLyrics.lines.length,
             'the cached A result should match the original parsed lyrics');
 
         print(`trackA=${original.title}`);
-        print(`trackBHasSyncedLyrics=${Boolean(secondLyrics?.length)}`);
+        print(`trackBSyncLevel=${secondLyrics?.syncLevel ?? 'missing'}`);
         print(`networkRequests=${networkRequests}`);
         print('Live Firefox A -> B -> A session cache test passed');
     } finally {

@@ -1,3 +1,5 @@
+import {createLyricsDocument} from './lyrics-document.js';
+
 export class LrcParser {
     static parse(lrc) {
         if (typeof lrc !== 'string' || !lrc.trim())
@@ -66,5 +68,23 @@ export class LrcParser {
         }
 
         return found;
+    }
+
+    static parseDocument(lrc, {
+        source = 'lrclib-synced',
+        sourceId = null,
+        metadata = {},
+    } = {}) {
+        return createLyricsDocument({
+            source,
+            sourceId,
+            metadata,
+            lines: this.parse(lrc).map(line => ({
+                text: line.text,
+                startMs: Math.round(line.timeUs / 1000),
+                endMs: null,
+                words: [],
+            })),
+        });
     }
 }

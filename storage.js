@@ -1,9 +1,8 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
-import {LrcParser} from './lyrics-parser.js';
-
-const DATA_VERSION = 1;
+const LYRICS_CACHE_VERSION = 2;
+const OFFSET_STORE_VERSION = 1;
 const POSITIVE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const NEGATIVE_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_LYRICS_CACHE_ENTRIES = 500;
@@ -198,7 +197,8 @@ export class LyricsDiskCache {
             return {hit: false};
         }
 
-        if (!this._isValidRecord(record, hash))
+        const decoded = this._decodeRecord(record, hash);
+        if (!decoded.valid)
             return {hit: false};
 
         const ttl = record.negative
@@ -209,39 +209,37 @@ export class LyricsDiskCache {
             return {hit: false};
         }
 
-        let lines = null;
-        if (!record.negative) {
-            lines = LrcParser.parse(record.syncedLyrics);
-            if (lines.length === 0)
-                return {hit: false};
-        }
-
         record.lastAccessed = this._now();
         this._trackWrite(writeJson(file, record)).catch(error => {
             console.debug(`MPRIS Lyrics: could not refresh lyrics cache entry: ${error.message}`);
         });
-        return {hit: true, lines, record};
+        return {hit: true, payload: decoded.payload, record};
     }
 
-    put(track, {resultId = null, syncedLyrics = null} = {}) {
-        return this._trackWrite(this._put(track, {resultId, syncedLyrics}));
+    put(track, payload = null) {
+        return this._trackWrite(this._put(track, payload));
     }
 
-    async _put(track, {resultId, syncedLyrics}) {
+    async _put(track, payload) {
         const hash = trackHash(track);
         const now = this._now();
+        const raw = this._sanitizePayload(payload);
+        const negative = !raw.instrumental &&
+            ![raw.plainLyrics, raw.syncedLyrics, raw.lyricsfile]
+                .some(value => typeof value === 'string' && value.trim());
         const record = {
-            version: DATA_VERSION,
+            version: LYRICS_CACHE_VERSION,
             trackHash: hash,
             title: track.title ?? '',
             artist: track.artist ?? '',
             album: track.album ?? '',
             durationUs: Math.max(0, Number(track.durationUs) || 0),
-            resultId,
-            syncedLyrics: typeof syncedLyrics === 'string'
-                ? syncedLyrics
-                : null,
-            negative: typeof syncedLyrics !== 'string' || !syncedLyrics.trim(),
+            id: raw.id,
+            instrumental: raw.instrumental,
+            plainLyrics: raw.plainLyrics,
+            syncedLyrics: raw.syncedLyrics,
+            lyricsfile: raw.lyricsfile,
+            negative,
             fetchedAt: now,
             lastAccessed: now,
         };
@@ -263,16 +261,79 @@ export class LyricsDiskCache {
         return promise;
     }
 
-    _isValidRecord(record, hash) {
-        return record?.version === DATA_VERSION &&
-            record.trackHash === hash &&
+    _sanitizePayload(payload) {
+        return {
+            id: Number.isInteger(payload?.id) ? payload.id : null,
+            instrumental: payload?.instrumental === true,
+            plainLyrics: typeof payload?.plainLyrics === 'string'
+                ? payload.plainLyrics
+                : null,
+            syncedLyrics: typeof payload?.syncedLyrics === 'string'
+                ? payload.syncedLyrics
+                : null,
+            lyricsfile: typeof payload?.lyricsfile === 'string'
+                ? payload.lyricsfile
+                : null,
+        };
+    }
+
+    _decodeRecord(record, hash) {
+        const commonValid = record?.trackHash === hash &&
             typeof record.title === 'string' &&
             typeof record.artist === 'string' &&
             typeof record.album === 'string' &&
             Number.isFinite(record.durationUs) &&
             Number.isFinite(record.fetchedAt) &&
-            typeof record.negative === 'boolean' &&
-            (record.negative || typeof record.syncedLyrics === 'string');
+            typeof record.negative === 'boolean';
+        if (!commonValid)
+            return {valid: false};
+
+        if (record.version === 1) {
+            if (!record.negative && typeof record.syncedLyrics !== 'string')
+                return {valid: false};
+            return {
+                valid: true,
+                payload: record.negative
+                    ? null
+                    : {
+                        id: Number.isInteger(record.resultId)
+                            ? record.resultId
+                            : null,
+                        instrumental: false,
+                        plainLyrics: null,
+                        syncedLyrics: record.syncedLyrics,
+                        lyricsfile: null,
+                        trackName: record.title,
+                        artistName: record.artist,
+                        albumName: record.album,
+                        duration: record.durationUs / 1_000_000,
+                    },
+            };
+        }
+
+        if (record.version !== LYRICS_CACHE_VERSION)
+            return {valid: false};
+        if (typeof record.instrumental !== 'boolean' ||
+            !['plainLyrics', 'syncedLyrics', 'lyricsfile'].every(field =>
+                record[field] === null || typeof record[field] === 'string'))
+            return {valid: false};
+        if (record.negative)
+            return {valid: true, payload: null};
+
+        return {
+            valid: true,
+            payload: {
+                id: Number.isInteger(record.id) ? record.id : null,
+                instrumental: record.instrumental,
+                plainLyrics: record.plainLyrics,
+                syncedLyrics: record.syncedLyrics,
+                lyricsfile: record.lyricsfile,
+                trackName: record.title,
+                artistName: record.artist,
+                albumName: record.album,
+                duration: record.durationUs / 1_000_000,
+            },
+        };
     }
 
     async _evictOldest() {
@@ -382,7 +443,7 @@ export class OffsetStore {
                 console.debug(`MPRIS Lyrics: ignoring offset store: ${error.message}`);
         }
 
-        if (data?.version === DATA_VERSION && data.entries &&
+        if (data?.version === OFFSET_STORE_VERSION && data.entries &&
             typeof data.entries === 'object') {
             const loaded = new Map();
             for (const [hash, entry] of Object.entries(data.entries)) {
@@ -430,7 +491,7 @@ export class OffsetStore {
             const entries = Object.fromEntries(this._entries);
             try {
                 await writeJson(this._file, {
-                    version: DATA_VERSION,
+                    version: OFFSET_STORE_VERSION,
                     entries,
                 });
             } catch (error) {

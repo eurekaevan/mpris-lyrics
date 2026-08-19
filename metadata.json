@@ -1,0 +1,9 @@
+{
+  "uuid": "mpris-lyrics@eureka",
+  "name": "MPRIS Lyrics",
+  "description": "Show the current synchronized MPRIS lyric line in the GNOME panel.",
+  "version": 1,
+  "shell-version": [
+    "50"
+  ]
+}

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.mpris-lyrics"
+          path="/org/gnome/shell/extensions/mpris-lyrics/">
+    <key name="show-icon" type="b">
+      <default>true</default>
+      <summary>Show the music note icon</summary>
+    </key>
+    <key name="max-panel-width" type="i">
+      <range min="150" max="1000"/>
+      <default>500</default>
+      <summary>Maximum panel lyrics width</summary>
+    </key>
+    <key name="hide-when-paused" type="b">
+      <default>false</default>
+      <summary>Hide panel lyrics while playback is paused</summary>
+    </key>
+    <key name="fallback-track-info" type="b">
+      <default>true</default>
+      <summary>Show track information when synchronized lyrics are unavailable</summary>
+    </key>
+    <key name="global-offset-ms" type="i">
+      <range min="-10000" max="10000"/>
+      <default>0</default>
+      <summary>Global lyrics synchronization offset in milliseconds</summary>
+    </key>
+    <key name="preferred-player" type="s">
+      <default>'auto'</default>
+      <summary>Stable identifier of the preferred MPRIS player</summary>
+    </key>
+    <key name="cache-clear-generation" type="i">
+      <range min="0" max="2147483647"/>
+      <default>0</default>
+      <summary>Generation used to notify the extension after clearing cache</summary>
+    </key>
+  </schema>
+</schemalist>

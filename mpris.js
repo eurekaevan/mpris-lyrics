@@ -7,6 +7,7 @@ const DBUS_INTERFACE = 'org.freedesktop.DBus';
 const PROPERTIES_INTERFACE = 'org.freedesktop.DBus.Properties';
 const MPRIS_PREFIX = 'org.mpris.MediaPlayer2.';
 const MPRIS_PATH = '/org/mpris/MediaPlayer2';
+const ROOT_INTERFACE = 'org.mpris.MediaPlayer2';
 const PLAYER_INTERFACE = 'org.mpris.MediaPlayer2.Player';
 const CALL_TIMEOUT_MS = 5000;
 
@@ -27,6 +28,26 @@ function unpackNumber(value, fallback = 0) {
 function playbackRate(value) {
     const rate = unpackNumber(value, 1);
     return rate > 0 ? rate : 1;
+}
+
+function normalizeDesktopEntry(value) {
+    return value.trim().toLowerCase().replace(/\.desktop$/, '');
+}
+
+export function stablePlayerId({desktopEntry = '', identity = '', busName = ''}) {
+    const desktop = normalizeDesktopEntry(desktopEntry);
+    if (desktop)
+        return `desktop:${desktop}`;
+
+    const normalizedIdentity = identity.trim().toLowerCase();
+    if (normalizedIdentity)
+        return `identity:${normalizedIdentity}`;
+
+    const suffix = busName.startsWith(MPRIS_PREFIX)
+        ? busName.slice(MPRIS_PREFIX.length)
+        : busName;
+    const stableSuffix = suffix.replace(/\.instance(?:[_-].*)?$/, '');
+    return `bus:${stableSuffix.toLowerCase()}`;
 }
 
 export function parseMetadata(value) {
@@ -59,8 +80,9 @@ function metadataKey(metadata) {
 }
 
 export class MprisManager {
-    constructor(onStateChanged) {
+    constructor(onStateChanged, {onPlayersChanged = null} = {}) {
         this._onStateChanged = onStateChanged;
+        this._onPlayersChanged = onPlayersChanged;
         this._connection = null;
         this._players = new Map();
         this._selectedName = null;
@@ -68,6 +90,8 @@ export class MprisManager {
         this._cancellable = null;
         this._running = false;
         this._activitySerial = 0;
+        this._preferredPlayer = 'auto';
+        this._playerListSignature = '';
     }
 
     start() {
@@ -118,6 +142,25 @@ export class MprisManager {
         this._connection = null;
         this._cancellable = null;
         this._onStateChanged = null;
+        this._onPlayersChanged = null;
+    }
+
+    setPreferredPlayer(preferredPlayer) {
+        const value = typeof preferredPlayer === 'string' && preferredPlayer
+            ? preferredPlayer
+            : 'auto';
+        if (value === this._preferredPlayer)
+            return;
+
+        this._preferredPlayer = value;
+        this._notifyStateChanged();
+    }
+
+    getPlayers() {
+        return [...this._players.values()]
+            .filter(player => player.ready && player.identityReady)
+            .map(player => this._descriptor(player))
+            .sort((a, b) => a.displayName.localeCompare(b.displayName));
     }
 
     getPositionUs() {
@@ -182,6 +225,10 @@ export class MprisManager {
         const now = GLib.get_monotonic_time();
         const player = {
             name,
+            identity: '',
+            desktopEntry: '',
+            stableId: stablePlayerId({busName: name}),
+            identityReady: false,
             metadata: emptyMetadata(),
             playbackStatus: 'Stopped',
             rate: 1,
@@ -219,6 +266,7 @@ export class MprisManager {
             });
 
         this._refreshPlayer(player);
+        this._refreshIdentity(player);
     }
 
     _removePlayer(name) {
@@ -275,6 +323,48 @@ export class MprisManager {
                     return;
 
                 this._applyAllProperties(player, properties);
+            });
+    }
+
+    _refreshIdentity(player) {
+        this._connection.call(
+            player.name,
+            MPRIS_PATH,
+            PROPERTIES_INTERFACE,
+            'GetAll',
+            new GLib.Variant('(s)', [ROOT_INTERFACE]),
+            new GLib.VariantType('(a{sv})'),
+            Gio.DBusCallFlags.NONE,
+            CALL_TIMEOUT_MS,
+            this._cancellable,
+            (connection, result) => {
+                let properties;
+                try {
+                    [properties] = connection.call_finish(result).deepUnpack();
+                } catch (error) {
+                    if (this._running &&
+                        this._players.get(player.name) === player &&
+                        !error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                        console.debug(`MPRIS Lyrics: player identity unavailable for ${player.name}: ${error.message}`);
+                    if (this._running && this._players.get(player.name) === player) {
+                        player.identityReady = true;
+                        this._notifyStateChanged();
+                    }
+                    return;
+                }
+
+                if (!this._running || this._players.get(player.name) !== player)
+                    return;
+
+                player.identity = unpackString(properties.Identity);
+                player.desktopEntry = unpackString(properties.DesktopEntry);
+                player.stableId = stablePlayerId({
+                    identity: player.identity,
+                    desktopEntry: player.desktopEntry,
+                    busName: player.name,
+                });
+                player.identityReady = true;
+                this._notifyStateChanged();
             });
     }
 
@@ -435,6 +525,18 @@ export class MprisManager {
         if (candidates.length === 0)
             return null;
 
+        if (this._preferredPlayer !== 'auto') {
+            const preferred = candidates.filter(player =>
+                player.stableId === this._preferredPlayer);
+            if (preferred.length > 0)
+                return this._chooseAutomatic(preferred);
+        }
+
+        return this._chooseAutomatic(candidates);
+    }
+
+    _chooseAutomatic(candidates) {
+
         const playing = candidates.filter(player =>
             player.playbackStatus === 'Playing');
         if (playing.length > 0)
@@ -450,12 +552,40 @@ export class MprisManager {
         return pool.sort((a, b) => b.lastActivity - a.lastActivity)[0];
     }
 
+    _descriptor(player) {
+        const fallback = player.name.slice(MPRIS_PREFIX.length)
+            .replace(/\.instance(?:[_-].*)?$/, '');
+        return {
+            busName: player.name,
+            identity: player.identity,
+            desktopEntry: player.desktopEntry,
+            stableId: player.stableId,
+            displayName: player.identity || player.desktopEntry || fallback,
+            playbackStatus: player.playbackStatus,
+            selected: player.name === this._selectedName,
+        };
+    }
+
+    _notifyPlayersChanged() {
+        if (!this._onPlayersChanged)
+            return;
+
+        const descriptors = this.getPlayers();
+        const signature = JSON.stringify(descriptors);
+        if (signature === this._playerListSignature)
+            return;
+
+        this._playerListSignature = signature;
+        this._onPlayersChanged(descriptors);
+    }
+
     _notifyStateChanged() {
         if (!this._running || !this._onStateChanged)
             return;
 
         const selected = this._choosePlayer();
         this._selectedName = selected?.name ?? null;
+        this._notifyPlayersChanged();
 
         if (!selected) {
             this._onStateChanged(null);
@@ -466,6 +596,7 @@ export class MprisManager {
             busName: selected.name,
             playbackStatus: selected.playbackStatus,
             positionUs: this._positionAt(selected),
+            player: this._descriptor(selected),
             metadata: {...selected.metadata},
         });
     }

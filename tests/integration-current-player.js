@@ -5,8 +5,28 @@ import {MprisManager} from '../mpris.js';
 
 const loop = new GLib.MainLoop(null, false);
 const provider = new LyricsProvider();
+let networkRequests = 0;
+const sendRequest = provider._sendRequest.bind(provider);
+provider._sendRequest = (...args) => {
+    networkRequests++;
+    return sendRequest(...args);
+};
 let requested = false;
 let finished = false;
+let lyricsFinished = false;
+let selectedPlayer = null;
+
+function maybeFinish() {
+    if (!lyricsFinished || !selectedPlayer)
+        return;
+
+    print(`identity=${selectedPlayer.identity}`);
+    print(`desktopEntry=${selectedPlayer.desktopEntry}`);
+    print(`stableId=${selectedPlayer.stableId}`);
+    print(`networkRequests=${networkRequests}`);
+    finished = true;
+    loop.quit();
+}
 
 const manager = new MprisManager(state => {
     if (!state || requested)
@@ -24,9 +44,14 @@ const manager = new MprisManager(state => {
     provider.fetch(state.metadata, lines => {
         print(`syncedLines=${lines?.length ?? 0}`);
         print(`currentLine=${LrcParser.currentLine(lines, manager.getPositionUs()) ?? ''}`);
-        finished = true;
-        loop.quit();
+        lyricsFinished = true;
+        maybeFinish();
     });
+}, {
+    onPlayersChanged: players => {
+        selectedPlayer = players.find(player => player.selected) ?? null;
+        maybeFinish();
+    },
 });
 
 manager.start();

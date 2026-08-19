@@ -1,8 +1,9 @@
 {
   "uuid": "mpris-lyrics@eureka",
   "name": "MPRIS Lyrics",
-  "description": "Show the current synchronized MPRIS lyric line in the GNOME panel.",
-  "version": 1,
+  "description": "Show synchronized MPRIS lyrics in the GNOME panel and a scrollable popup.",
+  "version": 3,
+  "settings-schema": "org.gnome.shell.extensions.mpris-lyrics",
   "shell-version": [
     "50"
   ]

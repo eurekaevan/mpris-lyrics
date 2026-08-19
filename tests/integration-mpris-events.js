@@ -11,7 +11,15 @@ const MPRIS_PATH = '/org/mpris/MediaPlayer2';
 const PLAYER_INTERFACE = 'org.mpris.MediaPlayer2.Player';
 const PROPERTIES_INTERFACE = 'org.freedesktop.DBus.Properties';
 
-const interfaceXml = `
+const rootInterfaceXml = `
+<node>
+  <interface name="org.mpris.MediaPlayer2">
+    <property name="Identity" type="s" access="read"/>
+    <property name="DesktopEntry" type="s" access="read"/>
+  </interface>
+</node>`;
+
+const playerInterfaceXml = `
 <node>
   <interface name="org.mpris.MediaPlayer2.Player">
     <property name="PlaybackStatus" type="s" access="read"/>
@@ -65,6 +73,14 @@ let positionUs = 10_000_000;
 let positionGets = 0;
 
 const implementation = {
+    get Identity() {
+        return 'Event Test Player';
+    },
+
+    get DesktopEntry() {
+        return 'event-test';
+    },
+
     get PlaybackStatus() {
         return playbackStatus;
     },
@@ -85,9 +101,12 @@ const implementation = {
     },
 };
 
-const exported = Gio.DBusExportedObject.wrapJSObject(
-    interfaceXml, implementation);
-exported.export(connection, MPRIS_PATH);
+const exportedRoot = Gio.DBusExportedObject.wrapJSObject(
+    rootInterfaceXml, implementation);
+const exportedPlayer = Gio.DBusExportedObject.wrapJSObject(
+    playerInterfaceXml, implementation);
+exportedRoot.export(connection, MPRIS_PATH);
+exportedPlayer.export(connection, MPRIS_PATH);
 
 function requestName() {
     connection.call_sync(
@@ -141,10 +160,13 @@ function seeked(newPositionUs) {
 const loop = new GLib.MainLoop(null, false);
 let state = null;
 let callbackCount = 0;
+let players = [];
 let scenarioError = null;
 const manager = new MprisManager(nextState => {
     state = nextState;
     callbackCount++;
+}, {
+    onPlayersChanged: nextPlayers => (players = nextPlayers),
 });
 manager.start();
 
@@ -158,6 +180,9 @@ async function run() {
         'the initial paused state was not loaded');
     assert(positionGets === 1,
         'initial discovery should read Position exactly once via GetAll');
+    await waitUntil(
+        () => players[0]?.stableId === 'desktop:event-test',
+        'the root MPRIS identity was not exposed as a stable descriptor');
 
     const beforeResumeGets = positionGets;
     playbackStatus = 'Playing';
@@ -251,7 +276,8 @@ try {
 } catch {
     // The name may already have been released by the successful scenario.
 }
-exported.unexport();
+exportedRoot.unexport();
+exportedPlayer.unexport();
 
 if (scenarioError)
     throw scenarioError;

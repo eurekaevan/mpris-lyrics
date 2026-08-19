@@ -62,6 +62,7 @@ const provider = new LyricsProvider({
     apiUrl: `${baseUri}/api/get`,
     requestSpacingMs: 0,
     timeoutSeconds: 2,
+    persistentCache: false,
 });
 const baseTrack = {
     artist: 'MPRIS Lyrics',
@@ -88,14 +89,51 @@ async function run() {
         validQuery.includes('album_name=HTTP Integration') &&
         validQuery.includes('duration=120'),
         'the LRCLIB request must include title, artist, album and duration');
+    const afterFirstValid = receivedQueries.length;
+    const cachedValid = await fetch('Valid Lyrics');
+    assert(cachedValid?.[0]?.text === 'current' &&
+        receivedQueries.length === afterFirstValid,
+        'a successful result should be served from the session cache');
     assert(await fetch('Invalid JSON') === null,
         'invalid JSON should safely return no lyrics');
     assert(await fetch('HTTP Error') === null,
         'an HTTP error should safely return no lyrics');
     assert(await fetch('No Lyrics') === null,
         'a response without syncedLyrics should safely return no lyrics');
+    const afterFirstNoLyrics = receivedQueries.length;
+    assert(await fetch('No Lyrics') === null &&
+        receivedQueries.length === afterFirstNoLyrics,
+        'a no-lyrics result should be served from the session cache');
     assert(await fetch('Malformed LRC') === null,
         'malformed LRC should safely return no lyrics');
+
+    await fetch('Cache A');
+    await fetch('Cache B');
+    const afterCacheB = receivedQueries.length;
+    const cacheAAgain = await fetch('Cache A');
+    assert(cacheAAgain?.[0]?.text === 'current' &&
+        receivedQueries.length === afterCacheB,
+        'A -> B -> A should reuse A without another HTTP request');
+
+    const evictionProvider = new LyricsProvider({
+        apiUrl: `${baseUri}/api/get`,
+        requestSpacingMs: 0,
+        timeoutSeconds: 2,
+        maxCacheEntries: 2,
+        persistentCache: false,
+    });
+    const evictionFetch = title => new Promise(resolve => {
+        evictionProvider.fetch({...baseTrack, title}, resolve);
+    });
+    const beforeEviction = receivedQueries.length;
+    await evictionFetch('Eviction A');
+    await evictionFetch('Eviction B');
+    await evictionFetch('Eviction A');
+    await evictionFetch('Eviction C');
+    await evictionFetch('Eviction B');
+    assert(receivedQueries.length === beforeEviction + 4,
+        'the bounded LRU cache should refresh hits and evict the oldest entry');
+    evictionProvider.destroy();
 
     let staleCallbacks = 0;
     provider.fetch(
@@ -131,4 +169,4 @@ server.disconnect();
 if (scenarioError)
     throw scenarioError;
 
-print('LRCLIB HTTP, JSON, LRC and stale-response integration tests passed');
+print('LRCLIB HTTP, cache, JSON, LRC and stale-response integration tests passed');

@@ -2,86 +2,15 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup?version=3.0';
 
+import {LrcParser} from './lyrics-parser.js';
+import {LyricsDiskCache, trackKey} from './storage.js';
+
+export {LrcParser} from './lyrics-parser.js';
+
 const API_URL = 'https://lrclib.net/api/get';
 const USER_AGENT = 'MPRIS Lyrics/1.0 (mpris-lyrics@eureka)';
 const REQUEST_SPACING_MS = 300;
-const MAX_CACHE_ENTRIES = 64;
-
-export class LrcParser {
-    static parse(lrc) {
-        if (typeof lrc !== 'string' || !lrc.trim())
-            return [];
-
-        const offsetMatch = lrc.match(/^\s*\[offset:([+-]?\d+)\]\s*$/im);
-        const offsetUs = offsetMatch ? Number(offsetMatch[1]) * 1000 : 0;
-        const entries = [];
-
-        for (const sourceLine of lrc.split(/\r?\n/)) {
-            const timestamp = /\[(\d{1,3}):(\d{2}(?:\.\d{1,3})?)\]/g;
-            const times = [];
-            let match;
-
-            while ((match = timestamp.exec(sourceLine)) !== null) {
-                const minutes = Number(match[1]);
-                const seconds = Number(match[2]);
-                const timeUs = Math.max(0,
-                    Math.round((minutes * 60 + seconds) * 1_000_000) + offsetUs);
-                times.push(timeUs);
-            }
-
-            if (times.length === 0)
-                continue;
-
-            const text = sourceLine.replace(timestamp, '').trim();
-            for (const timeUs of times)
-                entries.push({timeUs, text});
-        }
-
-        entries.sort((a, b) => a.timeUs - b.timeUs);
-
-        // The last value wins for duplicate timestamps.
-        const deduplicated = [];
-        for (const entry of entries) {
-            const previous = deduplicated.at(-1);
-            if (previous?.timeUs === entry.timeUs)
-                previous.text = entry.text;
-            else
-                deduplicated.push(entry);
-        }
-
-        return deduplicated;
-    }
-
-    static currentLine(lines, positionUs) {
-        const index = this.currentIndex(lines, positionUs);
-        return index >= 0 ? lines[index].text : null;
-    }
-
-    static currentIndex(lines, positionUs) {
-        if (!Array.isArray(lines) || lines.length === 0)
-            return -1;
-
-        let low = 0;
-        let high = lines.length - 1;
-        let found = -1;
-
-        while (low <= high) {
-            const middle = Math.floor((low + high) / 2);
-            if (lines[middle].timeUs <= positionUs) {
-                found = middle;
-                low = middle + 1;
-            } else {
-                high = middle - 1;
-            }
-        }
-
-        return found;
-    }
-}
-
-function requestKey(track) {
-    return [track.title, track.artist, track.album, track.durationUs].join('\u0000');
-}
+const MAX_CACHE_ENTRIES = 100;
 
 function buildRequestUri(track, apiUrl = API_URL) {
     const parameters = [
@@ -107,6 +36,10 @@ export class LyricsProvider {
         apiUrl = API_URL,
         requestSpacingMs = REQUEST_SPACING_MS,
         timeoutSeconds = 15,
+        maxCacheEntries = MAX_CACHE_ENTRIES,
+        persistentCache = true,
+        cacheRoot = undefined,
+        diskCacheOptions = {},
     } = {}) {
         this._session = new Soup.Session({
             timeout: timeoutSeconds,
@@ -115,7 +48,17 @@ export class LyricsProvider {
         });
         this._apiUrl = apiUrl;
         this._requestSpacingMs = requestSpacingMs;
+        const cacheLimit = Math.floor(maxCacheEntries);
+        this._maxCacheEntries = Number.isFinite(cacheLimit)
+            ? Math.max(1, cacheLimit)
+            : MAX_CACHE_ENTRIES;
         this._cache = new Map();
+        this._diskCache = persistentCache
+            ? new LyricsDiskCache({
+                ...diskCacheOptions,
+                ...(cacheRoot === undefined ? {} : {cacheRoot}),
+            })
+            : null;
         this._cancellable = null;
         this._delayTimerId = 0;
         this._requestSerial = 0;
@@ -131,9 +74,13 @@ export class LyricsProvider {
             return;
         }
 
-        const key = requestKey(track);
+        const key = trackKey(track);
         if (this._cache.has(key)) {
             const cached = this._cache.get(key);
+            // Refresh insertion order so the first entry remains the least
+            // recently used one.
+            this._cache.delete(key);
+            this._cache.set(key, cached);
             // Run through the main loop so cached and network requests have the
             // same callback lifetime semantics.
             this._delayTimerId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
@@ -145,10 +92,28 @@ export class LyricsProvider {
             return;
         }
 
+        if (this._diskCache) {
+            const cancellable = new Gio.Cancellable();
+            this._cancellable = cancellable;
+            const serial = this._requestSerial;
+            this._readDiskCache(track, key, callback, serial, cancellable);
+            return;
+        }
+
         const serial = this._requestSerial;
         const elapsedMs = (GLib.get_monotonic_time() - this._lastRequestUs) / 1000;
         const delayMs = Math.max(0, this._requestSpacingMs - elapsedMs);
         this._scheduleRequest(track, key, callback, serial, delayMs, 0);
+    }
+
+    clearMemoryCache() {
+        this._cache.clear();
+    }
+
+    async clearCaches() {
+        this.cancelPending();
+        this.clearMemoryCache();
+        await this._diskCache?.clear();
     }
 
     cancelPending() {
@@ -171,6 +136,33 @@ export class LyricsProvider {
         this._session.abort();
         this._session = null;
         this._cache.clear();
+        this._diskCache = null;
+    }
+
+    async _readDiskCache(track, key, callback, serial, cancellable) {
+        let result = {hit: false};
+        try {
+            result = await this._diskCache.get(track, cancellable);
+        } catch (error) {
+            if (!error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                console.debug(`MPRIS Lyrics: lyrics disk cache read failed: ${error.message}`);
+        } finally {
+            if (this._cancellable === cancellable)
+                this._cancellable = null;
+        }
+
+        if (serial !== this._requestSerial || this._destroyed)
+            return;
+
+        if (result.hit) {
+            this._remember(key, result.lines);
+            callback(result.lines);
+            return;
+        }
+
+        const elapsedMs = (GLib.get_monotonic_time() - this._lastRequestUs) / 1000;
+        const delayMs = Math.max(0, this._requestSpacingMs - elapsedMs);
+        this._scheduleRequest(track, key, callback, serial, delayMs, 0);
     }
 
     _scheduleRequest(track, key, callback, serial, delayMs, attempt) {
@@ -248,6 +240,7 @@ export class LyricsProvider {
 
                 if (status === 404) {
                     this._remember(key, null);
+                    this._persist(track, null, null);
                     callback(null);
                     return;
                 }
@@ -264,6 +257,10 @@ export class LyricsProvider {
                     const lines = LrcParser.parse(json.syncedLyrics);
                     const value = lines.length > 0 ? lines : null;
                     this._remember(key, value);
+                    this._persist(
+                        track,
+                        json.id ?? null,
+                        value ? json.syncedLyrics : null);
                     callback(value);
                 } catch (error) {
                     console.warn(`MPRIS Lyrics: invalid LRCLIB response: ${error.message}`);
@@ -277,9 +274,15 @@ export class LyricsProvider {
             this._cache.delete(key);
         this._cache.set(key, value);
 
-        if (this._cache.size > MAX_CACHE_ENTRIES) {
+        if (this._cache.size > this._maxCacheEntries) {
             const oldest = this._cache.keys().next().value;
             this._cache.delete(oldest);
         }
+    }
+
+    _persist(track, resultId, syncedLyrics) {
+        this._diskCache?.put(track, {resultId, syncedLyrics}).catch(error => {
+            console.warn(`MPRIS Lyrics: could not write lyrics cache: ${error.message}`);
+        });
     }
 }

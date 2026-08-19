@@ -2,7 +2,8 @@
 
 MPRIS Lyrics 是一个面向 GNOME Shell 50 的极简扩展。它自动发现会话总线上的
 `org.mpris.MediaPlayer2.*` 播放器，从 MPRIS 元数据查询 LRCLIB，并在顶部状态栏
-显示当前一句同步歌词。
+显示当前一句同步歌词。点击歌词会打开 Shell 原生 popup，其中包含歌曲信息、可滚动
+的完整同步歌词、当前行高亮、逐歌曲时间偏移和播放器选择。
 
 它不调用 `playerctl`，不使用 Spotify Web API、OAuth 或 Spotify track ID。Firefox
 中的 Spotify Web 和暴露标准 MPRIS 的 Spotify Linux 客户端走同一条数据路径。
@@ -15,13 +16,27 @@ make install
 gnome-extensions enable mpris-lyrics@eureka
 ```
 
-更新代码后可以运行：
+`make reload` 可以执行当前已加载版本的 disable / enable 生命周期检查：
 
 ```sh
 make reload
 ```
 
-事件驱动 MPRIS 调用计数和本地 HTTP 错误/取消测试：
+GNOME Shell 50 会在当前进程中缓存已经 import 的扩展 ESM。复制了新的 JavaScript
+代码后，disable / enable 不会 fresh-import 新模块；要实际运行新代码必须注销并重新
+登录。`make reload` 不能替代这一步。
+
+重新登录并让 Shell 发现 `prefs.js` 后，可以打开 GTK4/Libadwaita 设置：
+
+```sh
+gnome-extensions prefs mpris-lyrics@eureka
+```
+
+设置会通过 GSettings 立即反映到正在运行的扩展，不需要再次 disable / enable。首次从
+没有 Preferences 的旧版本升级时，当前登录会话仍缓存旧的扩展描述，需要重新登录一次
+后上述命令才会发现新页面。
+
+事件驱动 MPRIS 调用计数，以及本地 HTTP 缓存/错误/取消测试：
 
 ```sh
 make integration
@@ -33,21 +48,43 @@ make integration
 gjs -m tests/integration-current-player.js
 ```
 
+下面的真实测试会对当前播放器执行一次 Next / Previous，验证 A → B → A 的
+session cache hit，并恢复 A 的位置和原播放状态：
+
+```sh
+gjs -m tests/integration-track-cache.js
+```
+
 `tests/integration-playback-sync.js` 是开发期行为测试：它会暂时控制当前播放器完成
 Play/Pause/Resume 和前后 Seek，验证 monotonic 推算、暂停冻结和跳转校准，然后恢复
 原状态与位置。
+
+真实 Firefox 与临时第二播放器的 Auto / preferred / fallback 策略测试不会控制播放：
+
+```sh
+gjs -m tests/integration-live-player-policy.js
+```
+
+安装态 Preferences 的自动打开与控件类型检查：
+
+```sh
+gjs -m tests/prefs-window.js \
+  ~/.local/share/gnome-shell/extensions/mpris-lyrics@eureka
+```
 
 GNOME 50 的嵌套 Shell 生命周期检查使用打包后的 zip：
 
 ```sh
 make check
-dbus-run-session -- gnome-shell-test-tool --headless \
+dbus-run-session -- env GSETTINGS_BACKEND=memory \
+  gnome-shell-test-tool --headless \
   --extension /tmp/mpris-lyrics@eureka.shell-extension.zip \
   tests/shell-extension.js
 ```
 
 Wayland 会话中无法用 `Alt+F2` 后输入 `r` 重启 Shell。如果首次安装后当前 Shell
-没有发现扩展，请注销并重新登录一次。查看本次登录的扩展日志：
+没有发现扩展，或安装了新的 JavaScript 版本，请注销并重新登录一次。查看本次登录的
+扩展日志：
 
 ```sh
 journalctl --user -b -o cat | grep 'MPRIS Lyrics'
@@ -57,24 +94,48 @@ Fish 用户可直接运行上述命令；Makefile 内部使用 `make` 自己的�
 
 ## 结构
 
-- `extension.js`：生命周期、选曲状态与歌词/UI 协调、逐歌词时间戳的一次性定时器。
-- `mpris.js`：播放器发现和选择、D-Bus 信号、Position 单次校准和 monotonic 推算。
-- `lyrics.js`：LRCLIB 异步请求、取消、限速/429 重试、内存缓存、LRC 解析与二分查找。
-- `indicator.js`：GNOME 面板 UI、最大宽度和省略显示。
+- `extension.js`：生命周期、GSettings、effective offset 与歌词/UI 协调、逐时间戳的
+  一次性定时器。
+- `mpris.js`：播放器发现、稳定 Identity/DesktopEntry policy、D-Bus 信号、Position
+  单次校准和 monotonic 推算。
+- `lyrics.js`：LRCLIB 异步请求、取消、限速/429 重试，以及 memory/disk cache 分层。
+- `lyrics-parser.js`：LRC 解析和当前行二分查找。
+- `storage.js`：SHA-256 track key、异步 JSON disk cache、per-track offset store。
+- `indicator.js`：`PanelMenu` popup、歌曲信息、歌词 row、高亮、滚动、offset 和播放器控件。
+- `prefs.js`、`schemas/`：GTK4/Libadwaita Preferences 和正式 GSettings schema。
 
 没有周期性 polling。播放器发现使用 `NameOwnerChanged`，状态更新使用
 `PropertiesChanged`，跳转使用 `Seeked`；歌词显示只为下一条时间戳安排一次性本地
 timer。暂停、恢复和换歌时会单次读取 Position 重新校准，Seeked 信号直接提供新的
 Position 锚点。
 
+歌词加载后会为每个 parsed LRC entry 创建一次 row。推进时只移除上一行的 active
+style、设置新行的 active style，并更新顶栏。popup 打开时，下一次歌词变化会把新行
+直接滚动到 viewport 中央附近；popup 关闭时不执行滚动布局。
+
 ## 行为
 
 - 有同步歌词时显示 `♪ 当前歌词`。
 - 查询中、无同步歌词、歌词开始前以及 LRC 的空白时间标签处显示
   `♪ Title — Artist`。
-- 优先选择状态为 `Playing` 的播放器；没有正在播放的播放器时保留当前暂停播放器。
+- popup 始终保留 title / artist，album 存在时显示；无同步歌词时显示
+  `No synchronized lyrics found`。
+- popup 的 `-0.5s`、`+0.5s` 和 `Reset` 控制当前歌曲 offset，范围为 -10s 到 +10s；
+  Preferences 单独控制全局 offset。最终位置为
+  `playbackPosition + globalOffset + trackOffset`。
+- 每首歌 offset 使用 track metadata 的 SHA-256 key，保存到
+  `$XDG_CONFIG_HOME/mpris-lyrics/offsets.json`，最多保留最近使用的 500 条。
+- 成功同步歌词和 no-lyrics 结果先进入 100 首 memory LRU，再写入
+  `$XDG_CACHE_HOME/mpris-lyrics/lyrics/<sha256>.json`。positive cache 有效 30 天，
+  negative cache 有效 24 小时，disk cache 最多 500 条。
+- Auto 优先状态为 `Playing` 的播放器；preferred player 使用 DesktopEntry、其次
+  Identity 匹配。preferred 不存在时临时回退 Auto，重新出现后自动恢复。
 - 播放器全部消失或没有有效标题时隐藏面板项。
 - LRCLIB 请求仅携带 title、artist、album 和以秒为单位的 duration。
+
+正式 settings keys：`show-icon`、`max-panel-width`、`hide-when-paused`、
+`fallback-track-info`、`global-offset-ms`、`preferred-player`，以及用于跨进程通知清理
+memory cache 的内部 `cache-clear-generation`。
 
 ## 上游接口
 

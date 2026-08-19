@@ -35,6 +35,7 @@ function waitForCallback(start) {
 const invalidProvider = new LyricsProvider({
     apiUrl: 'not a valid URI',
     requestSpacingMs: 0,
+    persistentCache: false,
 });
 let invalidCallbacks = 0;
 invalidProvider.fetch(track, lines => {
@@ -49,6 +50,7 @@ const failedProvider = new LyricsProvider({
     apiUrl: 'http://127.0.0.1:9/api/get',
     requestSpacingMs: 0,
     timeoutSeconds: 1,
+    persistentCache: false,
 });
 let failureCallbacks = 0;
 waitForCallback(loop => {
@@ -66,6 +68,7 @@ const replacementProvider = new LyricsProvider({
     apiUrl: 'http://127.0.0.1:9/api/get',
     requestSpacingMs: 0,
     timeoutSeconds: 1,
+    persistentCache: false,
 });
 let staleCallbacks = 0;
 let currentCallbacks = 0;
@@ -92,6 +95,7 @@ const destroyedProvider = new LyricsProvider({
     apiUrl: 'http://127.0.0.1:9/api/get',
     requestSpacingMs: 0,
     timeoutSeconds: 1,
+    persistentCache: false,
 });
 let destroyedCallbacks = 0;
 destroyedProvider.fetch(track, () => destroyedCallbacks++);

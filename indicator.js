@@ -41,14 +41,21 @@ export class LyricsIndicator {
         onOffsetReset,
         onPlayerSelected,
         onPopupOpenChanged,
+        onTranslationAction,
     } = {}) {
         this._onOffsetAdjust = onOffsetAdjust ?? null;
         this._onOffsetReset = onOffsetReset ?? null;
         this._onPlayerSelected = onPlayerSelected ?? null;
         this._onPopupOpenChanged = onPopupOpenChanged ?? null;
+        this._onTranslationAction = onTranslationAction ?? null;
         this._lyricRows = [];
         this._lyricLabels = [];
+        this._translationLabels = [];
         this._document = null;
+        this._translationDocument = null;
+        this._translationEnabled = false;
+        this._translationDisplayMode = 'bilingual';
+        this._translationStatus = 'idle';
         this._wordSyncEnabled = true;
         this._wordStateSignature = '';
         this._activeLyricIndex = -1;
@@ -111,6 +118,31 @@ export class LyricsIndicator {
         });
         lyricsItem.add_child(this._scrollView);
         this.actor.menu.addMenuItem(lyricsItem);
+
+        this.actor.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        this._translationItem = new PopupMenu.PopupBaseMenuItem({
+            style_class: 'mpris-lyrics-translation-status',
+            reactive: false,
+            can_focus: false,
+        });
+        const translationControls = new St.BoxLayout({
+            x_expand: true,
+        });
+        this._translationStatusLabel = new St.Label({
+            text: 'Translation available on request',
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._translationActionButton = new St.Button({
+            style_class: 'button flat mpris-lyrics-translation-button',
+            label: 'Translate',
+            can_focus: true,
+        });
+        translationControls.add_child(this._translationStatusLabel);
+        translationControls.add_child(this._translationActionButton);
+        this._translationItem.add_child(translationControls);
+        this.actor.menu.addMenuItem(this._translationItem);
 
         this.actor.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
@@ -179,6 +211,11 @@ export class LyricsIndicator {
         this._resetButton.connect('clicked', () => {
             this._onOffsetReset?.();
         });
+        this._translationActionButton.connect('clicked', () => {
+            this._onTranslationAction?.({
+                forceRefresh: this._translationStatus === 'available',
+            });
+        });
         this.actor.menu.connect('open-state-changed', (_menu, open) => {
             if (open)
                 this._scheduleScrollToActive();
@@ -189,6 +226,7 @@ export class LyricsIndicator {
 
         this.setOffsets(0, 0);
         this.setPlayers([], 'auto');
+        this.setTranslationEnabled(false);
         this._showLyricsMessage('No lyrics found');
     }
 
@@ -202,6 +240,9 @@ export class LyricsIndicator {
         this._artistLabel.text = metadata.artist;
         this._albumLabel.text = metadata.album;
         this._albumLabel.visible = Boolean(metadata.album);
+        this._document = null;
+        this._translationDocument = null;
+        this.setTranslationState('idle');
         this._showLyricsMessage('Loading lyrics…');
     }
 
@@ -211,11 +252,14 @@ export class LyricsIndicator {
         this._albumLabel.text = '';
         this._albumLabel.hide();
         this._document = null;
+        this._translationDocument = null;
         this._clearLyricsRows();
+        this._updateTranslationControlVisibility();
     }
 
     setLyrics(document) {
         this._document = document ?? null;
+        this._translationDocument = null;
         if (document?.instrumental) {
             this._showLyricsMessage('Instrumental track');
             return;
@@ -232,18 +276,94 @@ export class LyricsIndicator {
                 reactive: false,
                 can_focus: false,
             });
+            const lineBox = new St.BoxLayout({
+                orientation: Clutter.Orientation.VERTICAL,
+                x_expand: true,
+            });
             const label = new St.Label({
+                style_class: 'mpris-lyrics-original',
                 text: line.text,
                 x_expand: true,
             });
             label.clutter_text.set_ellipsize(Pango.EllipsizeMode.NONE);
             label.clutter_text.set_line_wrap(true);
             label.clutter_text.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR);
-            row.add_child(label);
+            const translatedLabel = new St.Label({
+                style_class: 'mpris-lyrics-translation',
+                text: '',
+                x_expand: true,
+                visible: false,
+            });
+            translatedLabel.clutter_text.set_ellipsize(Pango.EllipsizeMode.NONE);
+            translatedLabel.clutter_text.set_line_wrap(true);
+            translatedLabel.clutter_text.set_line_wrap_mode(
+                Pango.WrapMode.WORD_CHAR);
+            lineBox.add_child(label);
+            lineBox.add_child(translatedLabel);
+            row.add_child(lineBox);
             this._lyricsBox.add_child(row);
             this._lyricRows.push(row);
             this._lyricLabels.push(label);
+            this._translationLabels.push(translatedLabel);
         }
+        this._applyTranslationToRows();
+        this._updateTranslationControlVisibility();
+    }
+
+    setTranslation(translation) {
+        this._translationDocument = translation ?? null;
+        this._applyTranslationToRows();
+    }
+
+    setTranslationEnabled(enabled) {
+        this._translationEnabled = Boolean(enabled);
+        this._updateTranslationControlVisibility();
+        this._applyTranslationToRows();
+    }
+
+    setTranslationDisplayMode(mode) {
+        this._translationDisplayMode = [
+            'bilingual', 'original', 'translated',
+        ].includes(mode) ? mode : 'bilingual';
+        this._applyTranslationToRows();
+    }
+
+    setTranslationState(status, {fromCache = false} = {}) {
+        this._translationStatus = status;
+        const states = {
+            idle: ['Translation available on request', 'Translate', true],
+            loading: ['Loading translation…', 'Loading…', false],
+            available: [
+                fromCache ? 'Translation loaded from cache' : 'Translation available',
+                'Refresh',
+                true,
+            ],
+            not_configured: ['Translation API key is not configured', '', false],
+            provider_unavailable: ['Translation provider unavailable', 'Retry', true],
+            network_error: ['Translation network error', 'Retry', true],
+            provider_error: ['Translation provider error', 'Retry', true],
+            authentication_error: ['Translation API key was rejected', 'Retry', true],
+            rate_limited: ['Translation rate limited', 'Retry', true],
+            invalid_response: ['Translation response was invalid', 'Retry', true],
+            canceled: ['Translation canceled', 'Retry', true],
+            same_language: ['Original language matches target language', '', false],
+            skipped: ['', '', false],
+        };
+        const [text, action, enabled] = states[status] ?? states.provider_error;
+        this._translationStatusLabel.text = text;
+        this._translationActionButton.label = action;
+        this._translationActionButton.visible = Boolean(action);
+        setButtonEnabled(this._translationActionButton, enabled);
+        this._updateTranslationControlVisibility();
+    }
+
+    translatedTextForLine(lineId) {
+        return this._translationDocument?.lines
+            ?.find(line => line.lineId === lineId)?.text ?? null;
+    }
+
+    isOriginalLineVisible(index) {
+        return Boolean(this._lyricLabels[index]?.visible);
     }
 
     setCurrentLyricIndex(index) {
@@ -382,6 +502,7 @@ export class LyricsIndicator {
         message.clutter_text.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR);
         this._lyricsBox.add_child(message);
         this._messageLabel = message;
+        this._updateTranslationControlVisibility();
     }
 
     _clearLyricsRows() {
@@ -389,9 +510,58 @@ export class LyricsIndicator {
         this._lyricsBox.destroy_all_children();
         this._lyricRows = [];
         this._lyricLabels = [];
+        this._translationLabels = [];
         this._activeLyricIndex = -1;
         this._wordStateSignature = '';
         this._messageLabel = null;
+    }
+
+    _applyTranslationToRows() {
+        if (!this._document?.lines?.length)
+            return;
+        const translations = new Map(
+            this._translationDocument?.lines?.map(line =>
+                [line.lineId, line.text]) ?? []);
+        for (let index = 0; index < this._document.lines.length; index++) {
+            const original = this._lyricLabels[index];
+            const translated = this._translationLabels[index];
+            if (!original || !translated)
+                continue;
+            const text = translations.get(this._document.lines[index].lineId);
+            const hasTranslation = this._translationEnabled &&
+                typeof text === 'string' && Boolean(text);
+            if (hasTranslation && translated.text !== text)
+                translated.text = text;
+
+            translated.remove_style_class_name(
+                'mpris-lyrics-translation-only');
+            switch (this._translationDisplayMode) {
+            case 'original':
+                original.show();
+                translated.hide();
+                break;
+            case 'translated':
+                original.visible = !hasTranslation;
+                translated.visible = hasTranslation;
+                if (hasTranslation)
+                    translated.add_style_class_name(
+                        'mpris-lyrics-translation-only');
+                break;
+            default:
+                original.show();
+                translated.visible = hasTranslation;
+                break;
+            }
+        }
+    }
+
+    _updateTranslationControlVisibility() {
+        if (!this._translationItem)
+            return;
+        this._translationItem.visible = this._translationEnabled &&
+            Boolean(this._document?.lines?.length) &&
+            !this._document?.instrumental &&
+            this._translationStatus !== 'skipped';
     }
 
     _resetLineText(index) {
@@ -461,6 +631,7 @@ export class LyricsIndicator {
         this._onOffsetReset = null;
         this._onPlayerSelected = null;
         this._onPopupOpenChanged = null;
+        this._onTranslationAction = null;
         this.actor?.destroy();
         this.actor = null;
         this._label = null;
@@ -472,12 +643,17 @@ export class LyricsIndicator {
         this._laters = null;
         this._lyricRows = [];
         this._lyricLabels = [];
+        this._translationLabels = [];
         this._document = null;
+        this._translationDocument = null;
         this._offsetLabel = null;
         this._effectiveOffsetLabel = null;
         this._decreaseButton = null;
         this._increaseButton = null;
         this._resetButton = null;
         this._playerMenu = null;
+        this._translationItem = null;
+        this._translationStatusLabel = null;
+        this._translationActionButton = null;
     }
 }

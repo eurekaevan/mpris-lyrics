@@ -12,7 +12,7 @@ export {normalizeLyricsPayload} from './lyrics-normalizer.js';
 
 const API_URL = 'https://lrclib.net/api/get';
 const SEARCH_API_URL = 'https://lrclib.net/api/search';
-const USER_AGENT = 'MPRIS Lyrics/4.0 (mpris-lyrics@eureka)';
+const USER_AGENT = 'MPRIS Lyrics/5.0 (mpris-lyrics@eureka)';
 const REQUEST_SPACING_MS = 300;
 const MAX_CACHE_ENTRIES = 100;
 

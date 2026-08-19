@@ -3,8 +3,9 @@
 MPRIS Lyrics 是一个面向 GNOME Shell 50 的极简扩展。它自动发现会话总线上的
 `org.mpris.MediaPlayer2.*` 播放器，从 MPRIS 元数据查询 LRCLIB，并在顶部状态栏
 显示当前一句同步歌词。点击歌词会打开 Shell 原生 popup，其中包含歌曲信息、可滚动
-歌词、逐行/逐词高亮、逐歌曲时间偏移和播放器选择。歌词统一归一化为
-`LyricsDocument`，来源可以是 LRCLIB Lyricsfile、LRC 或 plain lyrics。
+歌词、逐行/逐词高亮、可选的行级双语翻译、逐歌曲时间偏移和播放器选择。
+原歌词统一归一化为 `LyricsDocument`，翻译独立保存为按 `lineId` 对齐的
+`TranslationDocument`；翻译不会改写原文或 timing。
 
 它不调用 `playerctl`，不使用 Spotify Web API、OAuth 或 Spotify track ID。Firefox
 中的 Spotify Web 和暴露标准 MPRIS 的 Spotify Linux 客户端走同一条数据路径。
@@ -73,6 +74,20 @@ gjs -m tests/integration-live-player-policy.js
 gjs -m tests/integration-live-lyricsfile.js
 ```
 
+翻译的纯逻辑与本地 HTTP contract 测试不消耗真实 API：
+
+```sh
+gjs -m tests/test-translation-document.js
+gjs -m tests/test-translation-service.js
+gjs -m tests/integration-translation-http.js
+```
+
+下面的可选测试会在 GNOME Secret Service 写入并立即删除一个独立的测试值：
+
+```sh
+make integration-secret
+```
+
 安装态 Preferences 的自动打开与控件类型检查：
 
 ```sh
@@ -113,6 +128,15 @@ Fish 用户可直接运行上述命令；Makefile 内部使用 `make` 自己的�
 - `lyricsfile-parser.js`、`lyrics-parser.js`：Lyricsfile YAML 与 LRC 解析。
 - `lyrics-matcher.js`：title/artist/album/duration/同步质量的候选评分和可信阈值。
 - `lyrics-synchronizer.js`：当前行、word 状态和下一时间边界计算。
+- `translation-document.js`：稳定 lineId、翻译模型、source lyrics hash、返回 ID
+  验证与对齐。
+- `translation-batching.js`：整首优先、超长歌词按行/字符上限分块，保留边界上下文。
+- `translation-provider.js`：可替换 provider contract、OpenAI Responses 实现与
+  deterministic mock provider。
+- `translation-service.js`：cache-first、provider 选择、请求去重、取消、race validation
+  和错误状态。
+- `credentials.js`：使用 GNOME Secret Service/libsecret 保存 provider credential。
+- `translation-cache.js`：与 LRCLIB cache 分离的长期翻译 cache。
 - `storage.js`：SHA-256 track key、cache schema v2 原始 provider payload、v1 兼容和
   per-track offset store。
 - `indicator.js`：`PanelMenu` popup、静态/逐行/逐词显示、滚动、offset 和播放器控件。
@@ -129,6 +153,8 @@ Fish 用户可直接运行上述命令；Makefile 内部使用 `make` 自己的�
 歌词加载后会为每个 `LyricsLine` 创建一次 row。逐词推进只重设当前行 label 的安全
 Pango markup；歌词文本先经 `GLib.markup_escape_text()`，不能注入 markup。只有换行
 才滚动并更新顶栏，word 变化不会触发顶栏 layout 或重复滚动。
+译文是同一 row 中的第二个固定 label；翻译返回只更新译文 label，word
+timer 不重建或更新译文 actor。
 
 ## 行为
 
@@ -138,6 +164,16 @@ Pango markup；歌词文本先经 `GLib.markup_escape_text()`，不能注入 mar
 - instrumental 显示 `♪ Instrumental`，popup 显示 `Instrumental track`，并作为
   positive cache 保存。
 - plain lyrics 作为静态内容显示，不自动滚动，也不伪造时间戳。
+- 翻译默认关闭。启用后支持 Original + Translation、Original only 和
+  Translation only；缺失译文的行始终 fallback 原文。
+- 翻译仅按行进行；original word timing 与 karaoke 不变，译文不伪造 word
+  timing。顶栏默认仍显示原文，也可选 translated，未加载时 fallback 原文。
+- OpenAI provider 使用固定 `gpt-5.4-mini-2026-03-17` snapshot、Responses API
+  strict JSON Schema 和 `store: false`。API key 只保存在 Secret Service，不进入
+  GSettings、cache 或 journal。
+- 翻译 cache 位于
+  `$XDG_CACHE_HOME/mpris-lyrics/translations/<sha256>.json`，key 包含
+  `sourceLyricsHash + targetLanguage + provider + model + schema version`。
 - 查询中、无歌词、歌词开始前以及 LRC 的空白时间标签处显示
   `♪ Title — Artist`。
 - popup 始终保留 title / artist，album 存在时显示；无歌词时显示 `No lyrics found`。
@@ -156,12 +192,13 @@ Pango markup；歌词文本先经 `GLib.markup_escape_text()`，不能注入 mar
 - 播放器全部消失或没有有效标题时隐藏面板项。
 - `/api/get` 携带 title、artist、album 和秒级 duration；仅在 404 后使用 structured
   `/api/search`，再以 title/artist/album/duration 和同步质量评分，低于阈值不采用。
-- 所有请求使用 `MPRIS Lyrics/4.0 (mpris-lyrics@eureka)` User-Agent，顺序发送并间隔
+- 所有请求使用 `MPRIS Lyrics/5.0 (mpris-lyrics@eureka)` User-Agent，顺序发送并间隔
   300ms；429 最多重试一次且尊重 `Retry-After`。
 
-正式 settings keys：`show-icon`、`max-panel-width`、`hide-when-paused`、
-`fallback-track-info`、`word-sync-enabled`、`global-offset-ms`、`preferred-player`，
-以及用于跨进程通知清理 memory cache 的内部 `cache-clear-generation`。
+正式 translation settings：`translation-enabled`、`translation-target-language`、
+`translation-provider`、`translation-display-mode`、`auto-translate` 和
+`panel-lyrics-language`。credential 和 cache 变更通知使用独立 generation keys，
+不包含 secret。
 
 ## 上游接口
 
@@ -170,3 +207,5 @@ Pango markup；歌词文本先经 `GLib.markup_escape_text()`，不能注入 mar
 - [MPRIS 2.2 Player 接口](https://specifications.freedesktop.org/mpris/latest/Player_Interface.html)
 - [LRCLIB API](https://lrclib.net/docs)
 - [Lyricsfile 1.0 Draft Specification](https://github.com/tranxuanthang/lyricsfile/blob/main/SPECIFICATION.md)
+- [OpenAI Responses API](https://developers.openai.com/api/reference/resources/responses/methods/create)
+- [OpenAI Structured Outputs](https://developers.openai.com/api/docs/guides/structured-outputs)

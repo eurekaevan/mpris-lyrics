@@ -4,11 +4,13 @@ EXTENSION_DIR := $(USER_DATA_DIR)/gnome-shell/extensions/$(UUID)
 SOURCES := metadata.json extension.js indicator.js lyrics.js lyrics-document.js \
 	lyrics-matcher.js lyrics-normalizer.js lyrics-parser.js \
 	lyrics-synchronizer.js lyricsfile-parser.js mpris.js prefs.js storage.js \
+	credentials.js translation-batching.js translation-cache.js \
+	translation-document.js translation-provider.js translation-service.js \
 	stylesheet.css
 VENDOR_SOURCES := js-yaml.mjs LICENSE.js-yaml README.js-yaml.md
 SCHEMA := schemas/org.gnome.shell.extensions.mpris-lyrics.gschema.xml
 
-.PHONY: check integration install enable disable reload pack clean
+.PHONY: check integration integration-secret install enable disable reload pack clean
 
 check:
 	glib-compile-schemas --strict --dry-run schemas
@@ -16,6 +18,8 @@ check:
 	gjs -m tests/test-lyrics-document.js
 	gjs -m tests/test-lyricsfile.js
 	gjs -m tests/test-lyrics-matcher.js
+	gjs -m tests/test-translation-document.js
+	gjs -m tests/test-translation-service.js
 	gjs -m tests/test-mpris.js
 	gjs -m tests/test-player-policy.js
 	gnome-extensions pack --force --out-dir=/tmp \
@@ -30,6 +34,12 @@ check:
 		--extra-source=lyricsfile-parser.js \
 		--extra-source=mpris.js \
 		--extra-source=storage.js \
+		--extra-source=credentials.js \
+		--extra-source=translation-batching.js \
+		--extra-source=translation-cache.js \
+		--extra-source=translation-document.js \
+		--extra-source=translation-provider.js \
+		--extra-source=translation-service.js \
 		--extra-source=js-yaml.mjs \
 		--extra-source=LICENSE.js-yaml \
 		--extra-source=README.js-yaml.md .
@@ -39,6 +49,10 @@ integration:
 	gjs -m tests/test-lyrics-errors.js
 	gjs -m tests/integration-lyrics-http.js
 	gjs -m tests/integration-storage.js
+	gjs -m tests/integration-translation-http.js
+
+integration-secret:
+	gjs -m tests/integration-credentials.js
 
 install:
 	install -d "$(EXTENSION_DIR)"
@@ -71,6 +85,12 @@ pack:
 		--extra-source=lyricsfile-parser.js \
 		--extra-source=mpris.js \
 		--extra-source=storage.js \
+		--extra-source=credentials.js \
+		--extra-source=translation-batching.js \
+		--extra-source=translation-cache.js \
+		--extra-source=translation-document.js \
+		--extra-source=translation-provider.js \
+		--extra-source=translation-service.js \
 		--extra-source=js-yaml.mjs \
 		--extra-source=LICENSE.js-yaml \
 		--extra-source=README.js-yaml.md .

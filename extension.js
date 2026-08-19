@@ -9,6 +9,11 @@ import {SyncLevel} from './lyrics-document.js';
 import {LyricsSynchronizer} from './lyrics-synchronizer.js';
 import {MprisManager} from './mpris.js';
 import {OffsetStore, trackKey} from './storage.js';
+import {sourceLyricsHash} from './translation-document.js';
+import {
+    TranslationService,
+    TranslationStatus,
+} from './translation-service.js';
 
 const MIN_LYRICS_OFFSET_MS = -10_000;
 const MAX_LYRICS_OFFSET_MS = 10_000;
@@ -27,6 +32,8 @@ export default class MprisLyricsExtension extends Extension {
         this._currentTrackKey = null;
         this._lyricsDocument = null;
         this._lyricsLoaded = false;
+        this._translationDocument = null;
+        this._translationGeneration = 0;
         this._currentLyricIndex = -1;
         this._trackOffsetMs = 0;
         this._settingsSignalIds = [];
@@ -34,6 +41,12 @@ export default class MprisLyricsExtension extends Extension {
         this._settings = this.getSettings();
         this._globalOffsetMs = this._settings.get_int('global-offset-ms');
         this._wordSyncEnabled = this._settings.get_boolean('word-sync-enabled');
+        this._translationEnabled = this._settings.get_boolean(
+            'translation-enabled');
+        this._translationDisplayMode = this._settings.get_string(
+            'translation-display-mode');
+        this._panelLyricsLanguage = this._settings.get_string(
+            'panel-lyrics-language');
         this._connectSettings();
 
         this._offsetStore = new OffsetStore({
@@ -47,14 +60,20 @@ export default class MprisLyricsExtension extends Extension {
                 this._settings?.set_string('preferred-player', stableId);
             },
             onPopupOpenChanged: open => this._onPopupOpenChanged(open),
+            onTranslationAction: options =>
+                this._requestTranslation({...options, allowNetwork: true}),
         });
         this._indicator.setWordSyncEnabled(this._wordSyncEnabled);
+        this._indicator.setTranslationEnabled(this._translationEnabled);
+        this._indicator.setTranslationDisplayMode(
+            this._translationDisplayMode);
         this._indicator.setMaxPanelWidth(
             this._settings.get_int('max-panel-width'));
         this._indicator.setOffsets(0, this._globalOffsetMs);
         Main.panel.addToStatusArea(this.uuid, this._indicator.actor, 0, 'center');
 
         this._lyricsProvider = new LyricsProvider();
+        this._translationService = new TranslationService();
         this._mprisManager = new MprisManager(
             state => this._onPlayerStateChanged(state), {
                 onPlayersChanged: players => this._onPlayersChanged(players),
@@ -68,6 +87,7 @@ export default class MprisLyricsExtension extends Extension {
         this._enabled = false;
         this._stopLineTimer();
         this._stopWordTimer();
+        this._cancelTranslation();
 
         if (this._settings) {
             for (const id of this._settingsSignalIds)
@@ -81,6 +101,9 @@ export default class MprisLyricsExtension extends Extension {
         this._lyricsProvider?.destroy();
         this._lyricsProvider = null;
 
+        this._translationService?.destroy();
+        this._translationService = null;
+
         this._offsetStore?.destroy();
         this._offsetStore = null;
 
@@ -90,11 +113,15 @@ export default class MprisLyricsExtension extends Extension {
         this._state = null;
         this._lyricsDocument = null;
         this._lyricsLoaded = false;
+        this._translationDocument = null;
         this._currentTrackKey = null;
         this._currentLyricIndex = -1;
         this._trackOffsetMs = 0;
         this._globalOffsetMs = 0;
         this._wordSyncEnabled = false;
+        this._translationEnabled = false;
+        this._translationDisplayMode = 'bilingual';
+        this._panelLyricsLanguage = 'original';
         this._settings = null;
     }
 
@@ -121,6 +148,51 @@ export default class MprisLyricsExtension extends Extension {
                 this._updateWordAndSchedule();
             else
                 this._stopWordTimer();
+        });
+        connect('translation-enabled', () => {
+            this._translationEnabled = this._settings.get_boolean(
+                'translation-enabled');
+            this._indicator?.setTranslationEnabled(this._translationEnabled);
+            this._cancelTranslation();
+            if (this._translationEnabled)
+                this._requestTranslation();
+            else
+                this._clearTranslation('idle');
+            this._updateIndicatorAndSchedule(true);
+        });
+        connect('translation-target-language', () => {
+            this._restartTranslation();
+        });
+        connect('translation-provider', () => {
+            this._restartTranslation();
+        });
+        connect('translation-display-mode', () => {
+            this._translationDisplayMode = this._settings.get_string(
+                'translation-display-mode');
+            this._indicator?.setTranslationDisplayMode(
+                this._translationDisplayMode);
+            this._updateWordAndSchedule();
+        });
+        connect('auto-translate', () => {
+            this._restartTranslation();
+        });
+        connect('panel-lyrics-language', () => {
+            this._panelLyricsLanguage = this._settings.get_string(
+                'panel-lyrics-language');
+            this._updateIndicatorAndSchedule(true);
+        });
+        connect('translation-credential-generation', () => {
+            this._restartTranslation();
+        });
+        connect('translation-cache-clear-generation', () => {
+            this._cancelTranslation();
+            this._translationService?.clearCache().then(() => {
+                if (this._enabled && this._translationEnabled)
+                    this._requestTranslation();
+            }).catch(() => {
+                console.warn('MPRIS Lyrics: could not clear translation cache');
+            });
+            this._clearTranslation('idle');
         });
         connect('global-offset-ms', () => {
             this._globalOffsetMs = this._settings.get_int('global-offset-ms');
@@ -151,9 +223,11 @@ export default class MprisLyricsExtension extends Extension {
             this._currentTrackKey = null;
             this._lyricsDocument = null;
             this._lyricsLoaded = false;
+            this._translationDocument = null;
             this._currentLyricIndex = -1;
             this._trackOffsetMs = 0;
             this._lyricsProvider.cancelPending();
+            this._cancelTranslation();
             this._stopLineTimer();
             this._stopWordTimer();
             this._indicator.clearTrack();
@@ -168,12 +242,16 @@ export default class MprisLyricsExtension extends Extension {
             this._currentTrackKey = key;
             this._lyricsDocument = null;
             this._lyricsLoaded = false;
+            this._translationDocument = null;
             this._currentLyricIndex = -1;
             this._trackOffsetMs = this._offsetStore.get(state.metadata);
             this._indicator.setOffsets(
                 this._trackOffsetMs, this._globalOffsetMs);
             this._indicator.setText(this._panelText(trackInfo(state.metadata)));
             this._indicator.setTrack(state.metadata);
+            this._indicator.setTranslation(null);
+            this._indicator.setTranslationState('idle');
+            this._cancelTranslation();
 
             const requestedKey = key;
             this._lyricsProvider.fetch(state.metadata, document => {
@@ -184,6 +262,7 @@ export default class MprisLyricsExtension extends Extension {
                 this._lyricsLoaded = true;
                 this._indicator.setLyrics(document);
                 this._updateIndicatorAndSchedule(true);
+                this._requestTranslation();
             });
         }
 
@@ -213,6 +292,94 @@ export default class MprisLyricsExtension extends Extension {
         this._indicator?.setOffsets(
             this._trackOffsetMs, this._globalOffsetMs);
         this._updateIndicatorAndSchedule(true);
+    }
+
+    _cancelTranslation() {
+        this._translationGeneration++;
+        this._translationService?.cancelAll();
+    }
+
+    _clearTranslation(status = TranslationStatus.IDLE) {
+        this._translationDocument = null;
+        this._indicator?.setTranslation(null);
+        this._indicator?.setTranslationState(status);
+    }
+
+    _restartTranslation() {
+        if (!this._settings)
+            return;
+        this._cancelTranslation();
+        this._clearTranslation();
+        if (this._translationEnabled)
+            this._requestTranslation();
+        this._updateIndicatorAndSchedule(true);
+    }
+
+    _requestTranslation({
+        forceRefresh = false,
+        allowNetwork = null,
+    } = {}) {
+        if (!this._enabled || !this._translationEnabled ||
+            !this._translationService || !this._lyricsDocument ||
+            !this._currentTrackKey)
+            return;
+
+        const generation = ++this._translationGeneration;
+        const requestedTrackKey = this._currentTrackKey;
+        const requestedHash = sourceLyricsHash(this._lyricsDocument);
+        const targetLanguage = this._settings.get_string(
+            'translation-target-language').trim();
+        const providerId = this._settings.get_string('translation-provider');
+        const useNetwork = allowNetwork ??
+            this._settings.get_boolean('auto-translate');
+
+        this._translationService.translate(this._lyricsDocument, {
+            trackKey: requestedTrackKey,
+            targetLanguage,
+            providerId,
+            forceRefresh,
+            allowNetwork: useNetwork,
+            onStatus: result => {
+                if (generation === this._translationGeneration &&
+                    result.status === TranslationStatus.LOADING)
+                    this._indicator?.setTranslationState(result.status);
+            },
+        }).then(result => {
+            if (!this._enabled || generation !== this._translationGeneration ||
+                requestedTrackKey !== this._currentTrackKey ||
+                requestedHash !== sourceLyricsHash(this._lyricsDocument))
+                return;
+
+            const translation = result.document ?? null;
+            if (translation &&
+                (translation.trackKey !== requestedTrackKey ||
+                    translation.sourceLyricsHash !== requestedHash ||
+                    translation.targetLanguage !== targetLanguage ||
+                    translation.provider !== providerId))
+                return;
+
+            if (translation) {
+                this._translationDocument = translation;
+                this._indicator?.setTranslation(translation);
+            }
+            if (result.status !== TranslationStatus.CANCELED)
+                this._indicator?.setTranslationState(result.status, result);
+            if (![TranslationStatus.AVAILABLE,
+                TranslationStatus.IDLE,
+                TranslationStatus.SAME_LANGUAGE,
+                TranslationStatus.SKIPPED,
+                TranslationStatus.NOT_CONFIGURED].includes(result.status)) {
+                console.warn(
+                    `MPRIS Lyrics: translation status ${result.status}`);
+            }
+            this._updateIndicatorAndSchedule(true);
+        }).catch(() => {
+            if (generation !== this._translationGeneration)
+                return;
+            this._indicator?.setTranslationState(
+                TranslationStatus.PROVIDER_ERROR);
+            console.warn('MPRIS Lyrics: unexpected translation service failure');
+        });
     }
 
     _stopLineTimer() {
@@ -256,7 +423,13 @@ export default class MprisLyricsExtension extends Extension {
         } else if (document && document.syncLevel !== SyncLevel.NONE) {
             const index = LyricsSynchronizer.currentLineIndex(
                 document, effectivePositionMs);
-            const line = index >= 0 ? document.lines[index].text : null;
+            const currentLine = index >= 0 ? document.lines[index] : null;
+            const translated = currentLine &&
+                this._panelLyricsLanguage === 'translated'
+                ? this._translationDocument?.lines?.find(line =>
+                    line.lineId === currentLine.lineId)?.text
+                : null;
+            const line = translated || currentLine?.text || null;
             if (line)
                 panelContent = line;
 
@@ -316,7 +489,8 @@ export default class MprisLyricsExtension extends Extension {
         if (!this._state || !this._indicator || !this._wordSyncEnabled ||
             !this._indicator.isPopupOpen() ||
             this._lyricsDocument?.syncLevel !== SyncLevel.WORD ||
-            this._currentLyricIndex < 0)
+            this._currentLyricIndex < 0 ||
+            !this._indicator.isOriginalLineVisible(this._currentLyricIndex))
             return;
 
         const positionMs = effectivePositionMs ?? this._effectivePositionMs();

@@ -3,6 +3,8 @@ import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Scripting from 'resource:///org/gnome/shell/ui/scripting.js';
 
+import {sourceLyricsHash} from '../translation-document.js';
+
 const UUID = 'mpris-lyrics@eureka';
 
 function assert(condition, message) {
@@ -33,9 +35,15 @@ export async function run() {
         !settings.get_boolean('hide-when-paused') &&
         settings.get_boolean('fallback-track-info') &&
         settings.get_boolean('word-sync-enabled') &&
+        !settings.get_boolean('translation-enabled') &&
+        settings.get_boolean('auto-translate') &&
+        settings.get_string('translation-target-language') === 'zh-CN' &&
+        settings.get_string('translation-provider') === 'openai' &&
+        settings.get_string('translation-display-mode') === 'bilingual' &&
+        settings.get_string('panel-lyrics-language') === 'original' &&
         settings.get_int('global-offset-ms') === 0 &&
         settings.get_string('preferred-player') === 'auto',
-    'the packaged GSettings schema should expose the Phase 3 defaults');
+    'the packaged GSettings schema should expose the Phase 5 defaults');
     assert(view._label.get_style().includes('500px'),
         'the default maximum panel width should apply immediately');
 
@@ -45,6 +53,7 @@ export async function run() {
         album: 'Test Album',
     });
     const lines = Array.from({length: 30}, (_unused, index) => ({
+        lineId: `line-${index}`,
         startMs: index * 1000,
         endMs: null,
         words: [],
@@ -80,6 +89,26 @@ export async function run() {
     assert(view._label.text.startsWith('♪ Synchronized lyric'),
         'the top-bar lyric should still update');
 
+    view.setTranslationEnabled(true);
+    view.setTranslation({lines: [{
+        lineId: lines[20].lineId,
+        text: '<b>安全译文</b> & مرحبا',
+    }]});
+    view.setTranslationState('available');
+    assert(view._translationLabels[20].visible &&
+        view._translationLabels[20].clutter_text.get_text() ===
+            '<b>安全译文</b> & مرحبا' &&
+        view._translationLabels[19].visible === false,
+    'bilingual rows should align by line ID and treat translation as plain text');
+    assert(view._lyricRows.every((row, index) => row === originalRows[index]),
+        'translation arrival must not rebuild lyric rows');
+    view.setTranslationDisplayMode('translated');
+    assert(!view._lyricLabels[20].visible &&
+        view._translationLabels[20].visible &&
+        view._lyricLabels[19].visible,
+    'translated-only mode should fall back to original for a missing line');
+    view.setTranslationDisplayMode('bilingual');
+
     indicator.menu.open();
     await Scripting.sleep(500);
     assert(indicator.menu.isOpen,
@@ -106,6 +135,7 @@ export async function run() {
         metadata: {},
         syncLevel: 'word',
         lines: [{
+            lineId: 'word-line-0',
             text: markupText,
             startMs: 0,
             endMs: 3000,
@@ -118,19 +148,31 @@ export async function run() {
         }],
     };
     view.setLyrics(wordDocument);
+    view.setTranslation({lines: [{
+        lineId: 'word-line-0',
+        text: '逐词同步的行级译文',
+    }]});
     view.setCurrentLyricIndex(0);
     view.setCurrentWordStates(0, ['past', 'current', 'future', 'future']);
     assert(view._lyricLabels[0].clutter_text.get_text() === markupText,
         'word highlighting must escape lyric text instead of injecting markup');
     const wordLabel = view._lyricLabels[0];
+    const translatedWordLabel = view._translationLabels[0];
     view.setCurrentWordStates(0, ['past', 'past', 'current', 'future']);
-    assert(view._lyricLabels[0] === wordLabel,
-        'a word change should update only the current line label');
+    assert(view._lyricLabels[0] === wordLabel &&
+        view._translationLabels[0] === translatedWordLabel &&
+        translatedWordLabel.text === '逐词同步的行级译文',
+    'a word change should update only the original current-line label');
+    view.setTranslationDisplayMode('translated');
+    assert(!view.isOriginalLineVisible(0),
+        'translated-only mode should expose that original karaoke is hidden');
+    view.setTranslationDisplayMode('bilingual');
 
     const longDocument = {
         ...lineDocument,
         syncLevel: 'none',
         lines: Array.from({length: 350}, (_unused, index) => ({
+            lineId: `long-${index}`,
             text: `Static long-lyrics line ${index + 1}`,
             startMs: null,
             endMs: null,
@@ -148,9 +190,41 @@ export async function run() {
     const realMprisManager = instance._mprisManager;
     const realOffsetStore = instance._offsetStore;
     const realLyricsProvider = instance._lyricsProvider;
+    const realTranslationService = instance._translationService;
     let runtimeCacheClears = 0;
     instance._lyricsProvider = {
         clearCaches: async () => runtimeCacheClears++,
+    };
+    let translationRequests = 0;
+    let translationCacheClears = 0;
+    instance._translationService = {
+        cancelAll() {},
+        clearCache: async () => translationCacheClears++,
+        translate(document, request) {
+            translationRequests++;
+            request.onStatus?.({status: 'loading'});
+            return Promise.resolve({
+                status: 'available',
+                fromCache: translationRequests > 1,
+                document: {
+                    version: 1,
+                    trackKey: request.trackKey,
+                    sourceLyricsHash: sourceLyricsHash(document),
+                    sourceLanguage: 'en',
+                    targetLanguage: request.targetLanguage,
+                    provider: request.providerId,
+                    model: 'mock-v1',
+                    createdAt: new Date().toISOString(),
+                    lines: document.lines
+                        .filter(line => line.text)
+                        .map(line => ({
+                            lineId: line.lineId,
+                            text: `[zh-CN] ${line.text}`,
+                        })),
+                },
+            });
+        },
+        destroy() {},
     };
     const storedOffsets = new Map();
     instance._offsetStore = {
@@ -192,9 +266,9 @@ export async function run() {
         durationUs: 180_000_000,
     };
     const offsetLines = [
-        {startMs: 1000, endMs: null, words: [], text: 'First'},
-        {startMs: 2000, endMs: null, words: [], text: 'Second'},
-        {startMs: 3000, endMs: null, words: [], text: 'Third'},
+        {lineId: 'offset-0', startMs: 1000, endMs: null, words: [], text: 'First'},
+        {lineId: 'offset-1', startMs: 2000, endMs: null, words: [], text: 'Second'},
+        {lineId: 'offset-2', startMs: 3000, endMs: null, words: [], text: 'Third'},
     ];
     const offsetDocument = {
         source: 'test',
@@ -209,6 +283,7 @@ export async function run() {
         metadata: offsetMetadata,
     };
     instance._lyricsDocument = offsetDocument;
+    instance._currentTrackKey = 'offset-test-key';
     instance._lyricsLoaded = true;
     instance._trackOffsetMs = 0;
     instance._currentLyricIndex = -1;
@@ -298,6 +373,36 @@ export async function run() {
         'disabling word sync should immediately stop its boundary timer');
     settings.set_boolean('word-sync-enabled', true);
 
+    view.setLyrics(offsetDocument);
+    instance._lyricsDocument = offsetDocument;
+    instance._currentTrackKey = 'offset-test-key';
+    settings.set_boolean('translation-enabled', true);
+    await Scripting.sleep(50);
+    assert(translationRequests === 1 &&
+        view._translationLabels[0].text === '[zh-CN] First' &&
+        view._translationLabels[0].visible,
+    'enabling translation should apply line-aligned bilingual text without rebuilding rows');
+    settings.set_string('panel-lyrics-language', 'translated');
+    assert(view._label.text === '♪ [zh-CN] First',
+        'the panel should use a loaded translation when requested');
+    settings.set_string('translation-display-mode', 'translated');
+    assert(!view._lyricLabels[0].visible &&
+        instance._wordTimerId === 0,
+    'translated-only popup mode should not run original word updates');
+    settings.set_string('translation-display-mode', 'bilingual');
+    view._translationActionButton.emit('clicked', 1);
+    await Scripting.sleep(50);
+    assert(translationRequests === 2,
+        'the popup Refresh action should issue one forced translation request');
+    settings.set_int('translation-cache-clear-generation', 1);
+    await Scripting.sleep(50);
+    assert(translationCacheClears === 1 && translationRequests === 3,
+        'translation cache clearing should remain separate and reload automatically');
+    settings.set_string('panel-lyrics-language', 'original');
+    settings.set_boolean('translation-enabled', false);
+    assert(!view._translationItem.visible && view._label.text === '♪ First',
+        'disabling translation should restore exact Phase 4 panel behavior');
+
     settings.set_int('max-panel-width', 640);
     assert(view._label.get_style().includes('640px'),
         'maximum panel width should update without extension restart');
@@ -344,7 +449,13 @@ export async function run() {
         instrumental: false,
         metadata: {},
         syncLevel: 'none',
-        lines: [{text: 'Static lyrics', startMs: null, endMs: null, words: []}],
+        lines: [{
+            lineId: 'plain-0',
+            text: 'Static lyrics',
+            startMs: null,
+            endMs: null,
+            words: [],
+        }],
     };
     instance._lyricsDocument = plainDocument;
     view.setLyrics(plainDocument);
@@ -371,6 +482,7 @@ export async function run() {
     instance._mprisManager = realMprisManager;
     instance._offsetStore = realOffsetStore;
     instance._lyricsProvider = realLyricsProvider;
+    instance._translationService = realTranslationService;
 
     indicator.menu.close();
 
@@ -382,10 +494,11 @@ export async function run() {
         'disable() did not destroy the panel indicator');
     assert(instance._settings === null &&
         instance._settingsSignalIds.length === 0 &&
-        instance._lineTimerId === 0 && instance._wordTimerId === 0,
-    'disable() should disconnect settings and remove line/word timers');
+        instance._lineTimerId === 0 && instance._wordTimerId === 0 &&
+        instance._translationService === null,
+    'disable() should disconnect settings and destroy timers/translation service');
 }
 
 export function finish() {
-    print('GNOME Shell settings, popup, players, offsets and lifecycle test passed');
+    print('GNOME Shell bilingual popup, settings, timers and lifecycle test passed');
 }

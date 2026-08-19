@@ -131,7 +131,7 @@ async function run() {
         validQuery.includes('album_name=HTTP Integration') &&
         validQuery.includes('duration=120'),
         'the LRCLIB request must include title, artist, album and duration');
-    assert(validRequest.userAgent === 'MPRIS Lyrics/4.0 (mpris-lyrics@eureka)',
+    assert(validRequest.userAgent === 'MPRIS Lyrics/5.0 (mpris-lyrics@eureka)',
         'requests should identify this extension, not impersonate a browser');
     const afterFirstValid = receivedRequests.length;
     const cachedValid = await fetch('Valid Lyrics');

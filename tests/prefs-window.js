@@ -67,11 +67,17 @@ application.connect('activate', async app => {
                     'the preferences window did not provide a visible page');
                 const widgets = descendants(window);
                 assert(widgets.filter(widget => widget instanceof Adw.SwitchRow)
-                    .length === 4,
-                'preferences should contain four boolean SwitchRows');
+                    .length === 6,
+                'preferences should contain six boolean SwitchRows');
                 assert(widgets.filter(widget => widget instanceof Adw.SpinRow)
                     .length === 2,
                 'preferences should contain width and global-offset SpinRows');
+                assert(widgets.filter(widget => widget instanceof Adw.ComboRow)
+                    .length === 3,
+                'preferences should expose popup, panel, and provider choices');
+                assert(widgets.filter(widget => widget instanceof Adw.EntryRow)
+                    .length === 1,
+                'preferences should expose one arbitrary target-language entry');
                 print('GTK4/Libadwaita preferences window test passed');
                 window.close();
                 app.release();

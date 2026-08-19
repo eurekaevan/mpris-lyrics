@@ -1,8 +1,21 @@
+import GLib from 'gi://GLib';
+
 export const SyncLevel = Object.freeze({
     NONE: 'none',
     LINE: 'line',
     WORD: 'word',
 });
+
+export function createLineId(index, startMs, text) {
+    const identity = JSON.stringify([
+        Number.isInteger(index) ? index : -1,
+        Number.isInteger(startMs) ? startMs : '',
+        stringOrEmpty(text),
+    ]);
+    const digest = GLib.compute_checksum_for_string(
+        GLib.ChecksumType.SHA256, identity, -1);
+    return `l${index}-${digest.slice(0, 20)}`;
+}
 
 function stringOrEmpty(value) {
     return typeof value === 'string' ? value : '';
@@ -144,8 +157,9 @@ export function createLyricsDocument({
         sourceId: sourceId ?? null,
         instrumental: Boolean(instrumental),
         metadata: Object.freeze(normalizedMetadata),
-        lines: Object.freeze(normalizedLines.map(line => Object.freeze({
+        lines: Object.freeze(normalizedLines.map((line, index) => Object.freeze({
             ...line,
+            lineId: createLineId(index, line.startMs, line.text),
             words: Object.freeze(line.words.map(word => Object.freeze(word))),
         }))),
         syncLevel,

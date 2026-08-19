@@ -23,6 +23,30 @@
       <default>true</default>
       <summary>Highlight word-synchronized lyrics in the popup</summary>
     </key>
+    <key name="translation-enabled" type="b">
+      <default>false</default>
+      <summary>Enable line-level lyrics translation</summary>
+    </key>
+    <key name="translation-target-language" type="s">
+      <default>'zh-CN'</default>
+      <summary>BCP 47 target language code for lyrics translation</summary>
+    </key>
+    <key name="translation-provider" type="s">
+      <default>'openai'</default>
+      <summary>Translation provider identifier</summary>
+    </key>
+    <key name="translation-display-mode" type="s">
+      <default>'bilingual'</default>
+      <summary>Popup translation display mode</summary>
+    </key>
+    <key name="auto-translate" type="b">
+      <default>true</default>
+      <summary>Automatically translate lyrics when no cache entry exists</summary>
+    </key>
+    <key name="panel-lyrics-language" type="s">
+      <default>'original'</default>
+      <summary>Preferred language for top-bar lyrics</summary>
+    </key>
     <key name="global-offset-ms" type="i">
       <range min="-10000" max="10000"/>
       <default>0</default>
@@ -36,6 +60,16 @@
       <range min="0" max="2147483647"/>
       <default>0</default>
       <summary>Generation used to notify the extension after clearing cache</summary>
+    </key>
+    <key name="translation-cache-clear-generation" type="i">
+      <range min="0" max="2147483647"/>
+      <default>0</default>
+      <summary>Generation used to notify translation cache clearing</summary>
+    </key>
+    <key name="translation-credential-generation" type="i">
+      <range min="0" max="2147483647"/>
+      <default>0</default>
+      <summary>Generation used to notify translation credential changes</summary>
     </key>
   </schema>
 </schemalist>

@@ -61,22 +61,15 @@ class PlaybackProgressView {
             orientation: Clutter.Orientation.VERTICAL,
             x_expand: true,
         });
-        this._track = new St.Widget({
+        this._track = new St.BoxLayout({
             style_class: 'mpris-lyrics-progress-track',
-            layout_manager: new Clutter.BinLayout(),
             x_expand: true,
-        });
-        this._trackBackground = new St.Widget({
-            style_class: 'mpris-lyrics-progress-background',
-            x_expand: true,
-            y_expand: true,
         });
         this._fill = new St.Widget({
             style_class: 'mpris-lyrics-progress-fill',
             x_align: Clutter.ActorAlign.START,
             y_expand: true,
         });
-        this._track.add_child(this._trackBackground);
         this._track.add_child(this._fill);
         this.actor.add_child(this._track);
 
@@ -132,7 +125,6 @@ class PlaybackProgressView {
         this._allocationSignalId = 0;
         this.actor = null;
         this._track = null;
-        this._trackBackground = null;
         this._fill = null;
         this._currentLabel = null;
         this._durationLabel = null;

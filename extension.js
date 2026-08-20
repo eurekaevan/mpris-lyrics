@@ -27,9 +27,22 @@ function trackInfo(metadata) {
 
 function playbackTrackIdentity(state) {
     const stableTrackId = state.metadata.trackId?.trim();
-    return stableTrackId && stableTrackId !== MPRIS_NO_TRACK_ID
-        ? `${state.busName}\u0000${stableTrackId}`
-        : `${state.busName}\u0000${trackKey(state.metadata)}`;
+    const trackId = stableTrackId && stableTrackId !== MPRIS_NO_TRACK_ID
+        ? stableTrackId
+        : '';
+
+    // TrackId is not universally unique per track. Firefox, for example,
+    // exposes one constant object path for every Spotify Web track. Keep it as
+    // a useful signal for compliant players, but also include the metadata
+    // fields that identify a new lyrics lookup. Album is deliberately omitted
+    // so a display-only album correction does not rebuild the lyrics view.
+    return [
+        state.busName,
+        trackId,
+        state.metadata.title ?? '',
+        state.metadata.artist ?? '',
+        Math.max(0, Number(state.metadata.durationUs) || 0),
+    ].join('\u0000');
 }
 
 function displayMetadataKey(metadata) {

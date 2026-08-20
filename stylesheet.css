@@ -70,13 +70,13 @@
   height: 4px;
 }
 
-.mpris-lyrics-progress-background,
+.mpris-lyrics-progress-track,
 .mpris-lyrics-progress-fill {
   height: 4px;
   border-radius: 2px;
 }
 
-.mpris-lyrics-progress-background {
+.mpris-lyrics-progress-track {
   background-color: st-transparentize(-st-accent-color, 0.76);
 }
 

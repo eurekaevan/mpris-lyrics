@@ -220,6 +220,10 @@ export async function run() {
     await Scripting.sleep(500);
     assert(indicator.menu.isOpen,
         'the native PanelMenu popup should open');
+    const [trackX] = view._progressView._track.get_transformed_position();
+    const [fillX] = view._progressView._fill.get_transformed_position();
+    assert(Math.abs(fillX - trackX) < 0.5,
+        'playback progress fill should stay anchored to the start of the track');
     assert(instance._progressTimerId !== 0,
         'an open popup should run one low-frequency progress timer');
     assert(view._scrollView.vadjustment.value > 0,
@@ -410,6 +414,24 @@ export async function run() {
         view._lyricRows.every((row, index) => row === stableRows[index]) &&
         view._albumLabel.text === 'Corrected Album',
     'artUrl and display-only metadata changes must not refetch or rebuild lyrics');
+
+    instance._onPlayerStateChanged({
+        busName: 'org.mpris.MediaPlayer2.test',
+        playbackStatus: 'Playing',
+        positionUs: 0,
+        metadata: {
+            ...stableMetadata,
+            title: 'Replacement Track',
+            artist: 'Replacement Artist',
+            album: 'Replacement Album',
+            durationUs: 205_000_000,
+        },
+    });
+    assert(lyricFetches === 2 &&
+        view._titleLabel.text === 'Replacement Track' &&
+        view._artistLabel.text === 'Replacement Artist' &&
+        view._lyricRows.some((row, index) => row !== stableRows[index]),
+    'changed track metadata must refetch lyrics when Firefox reuses TrackId');
 
     const offsetMetadata = {
         title: 'Offset Test',

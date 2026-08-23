@@ -111,7 +111,7 @@ Wayland 会话中无法用 `Alt+F2` 后输入 `r` 重启 Shell。如果首次安
 扩展日志：
 
 ```sh
-journalctl --user -b -o cat | grep 'MPRIS Lyrics'
+journalctl --user -b -o cat | rg 'MPRIS Lyrics'
 ```
 
 Fish 用户可直接运行上述命令；Makefile 内部使用 `make` 自己的变量语法。
@@ -144,7 +144,8 @@ Fish 用户可直接运行上述命令；Makefile 内部使用 `make` 自己的�
   和播放器控件。
 - `artwork-loader.js`、`artwork-view.js`：`file://`/HTTP(S) 异步封面加载、大小限制、
   disk cache、取消/race 校验、TextureCache 解码和 fallback。
-- `ui-utils.js`：播放时间格式化与进度 fraction 的纯函数。
+- `ui-utils.js`：播放时间格式化、进度 fraction、歌词视觉层级、comfortable-zone
+  滚动目标和顶栏歌词移动时间轴的纯函数。
 - `prefs.js`、`schemas/`：GTK4/Libadwaita Preferences 和正式 GSettings schema。
 - `js-yaml.mjs`、`LICENSE.js-yaml`：随扩展打包的 js-yaml 4.1.0 readable ESM 与
   MIT license；`README.js-yaml.md` 记录固定 SHA-256 和可重复取得方式。
@@ -156,6 +157,9 @@ Fish 用户可直接运行上述命令；Makefile 内部使用 `make` 自己的�
 换歌或 disable 时 word timer 会移除。
 暂停、恢复和换歌时会单次读取 Position 重新校准，Seeked 信号直接提供新的 Position
 锚点。
+顶栏长歌词使用单个原生 Clutter transition；速度变化、暂停恢复与 Seek 只在已有的
+歌词行/播放状态事件上重新锚定，不增加 polling、逐帧 JS loop 或 playback tick
+布局计算。
 
 歌词加载后会为每个 `LyricsLine` 创建一次 row。逐词推进只重设当前行 label 的安全
 Pango markup；歌词文本先经 `GLib.markup_escape_text()`，不能注入 markup。只有换行
@@ -165,8 +169,20 @@ timer 不重建或更新译文 actor。
 
 ## 行为
 
-- 有逐行或逐词歌词时，顶栏使用主题 symbolic music icon 加当前整句歌词；关闭
-  `show-icon` 只隐藏 icon，不改动 label 文本。
+- 有逐行或逐词歌词时，顶栏使用主题 symbolic music icon 加当前整句歌词；歌词区域
+  左对齐，关闭 `show-icon` 只隐藏 icon 并释放预留宽度，不改动 label 文本。
+- 顶栏 Indicator 的自然宽度约为 320px，同时受 `max-panel-width` 限制；短歌词不会
+  反复收窄，长歌词和侧边布局会在触及中间日期区域前让出空间。
+- `panel-position` 支持 Left、Right、Center、Far left 和 Far right。Left/Right 位于
+  对应 panel box 靠近中间的一侧，Far left/Far right 位于屏幕外缘；移动的是同一个
+  Indicator container，不保存 transient bus name。
+- 同步歌词超出可用宽度时，图标和 Indicator 边界保持固定，只在裁剪 viewport 内从
+  句首向句尾浏览一次。移动距离取实际像素 overflow，时间轴取当前行开始时间、下一行
+  开始时间（末行 fallback 显式结束时间、最后一个 word 或歌曲时长）和 MPRIS 播放速率。
+  默认约保留开头 12%、移动 68%、句尾 20%，开头最多 600ms、句尾最多 1000ms。
+- Seek 会直接定位到该句对应的水平位置；Pause 冻结当前位置，Resume 从当前播放位置
+  重新对齐；鼠标停留时暂停移动，离开后重新锚定。系统 reduced-motion 时保留 END
+  ellipsize，不执行水平动画。缺少可靠结束时间的内容保持静态，不使用任意固定速度。
 - Lyricsfile 的 word timing 只影响 popup；当前 word 使用 inherited theme foreground、
   underline/weight 和 alpha 区分已唱、当前、未唱，不使用固定鲜艳颜色。
 - instrumental 在顶栏显示 `Instrumental`，popup 显示 `Instrumental track`，并作为
@@ -187,6 +203,12 @@ timer 不重建或更新译文 actor。
   `mpris:artUrl` 缺失或失败时保留 symbolic fallback；HTTP(S) 封面按 artUrl SHA-256
   缓存到 `$XDG_CACHE_HOME/mpris-lyrics/artwork/`，最多 128 张或 64 MiB，单次响应上限
   8 MiB。
+- popup 的媒体 header 使用 80px 正方形 artwork；Title 最多两行，Artist/Album 各一行，
+  Album 缺失时隐藏。歌词滚动视口最大高度为 18em（默认 Shell 字号约 240px），当前行
+  目标位置约为 viewport 的 47%，已在 40%–58% comfortable zone 内时不会反复滚动。
+- 歌词行视觉权重按与 currentIndex 的距离集中计算：当前行 100%，相邻约 72%，距离 2
+  约 56%，更远约 42%；译文在对应原文基础上继续降权。当前行切换只更新已有 row 的
+  class/opacity，不重建整首歌词。
 - popup 的 symbolic `−`/`+` 和 `Reset` 控制当前歌曲 offset，范围为 -10s 到 +10s；
   Preferences 单独控制全局 offset。最终位置为
   `playbackPosition + globalOffset + trackOffset`。
@@ -205,10 +227,20 @@ timer 不重建或更新译文 actor。
 - LRCLIB 请求使用 `MPRIS Lyrics/5.0 (mpris-lyrics@eureka)` User-Agent，顺序发送并间隔
   300ms；429 最多重试一次且尊重 `Retry-After`。
 
-正式 translation settings：`translation-enabled`、`translation-target-language`、
-`translation-provider`、`translation-display-mode`、`auto-translate` 和
-`panel-lyrics-language`。credential 和 cache 变更通知使用独立 generation keys，
-不包含 secret。
+## 设置键
+
+- Panel：`show-icon`、`panel-position`、`max-panel-width`、`hide-when-paused`。
+- Lyrics：`fallback-track-info`、`word-sync-enabled`、`global-offset-ms`。
+- Translation：`translation-enabled`、`translation-target-language`、
+  `translation-provider`、`translation-display-mode`、`auto-translate`、
+  `panel-lyrics-language`。
+- Player：`preferred-player` 只保存稳定 DesktopEntry/Identity policy；临时 MPRIS bus name
+  不写入设置。
+- Maintenance：credential 和 cache 变更通知使用独立 generation keys，不包含 secret。
+
+静态视觉规则集中在 `stylesheet.css`；当前行状态、时间轴位置、运行时宽度和滚动位置由
+JavaScript 控制。颜色、accent、symbolic icon 和 scrollbar 均继承 GNOME theme，不从
+专辑封面提取颜色，也不硬编码深色/浅色前景。
 
 ## 上游接口
 

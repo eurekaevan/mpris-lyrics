@@ -2,6 +2,9 @@ import {
     comfortableScrollTarget,
     formatDuration,
     getLineVisualLevel,
+    normalizePanelTimeline,
+    panelPanState,
+    panelTimelinesEqual,
     progressFraction,
 } from '../ui-utils.js';
 
@@ -26,6 +29,53 @@ assert(progressFraction(-10, 100) === 0 &&
 assert(progressFraction(10, 0) === 0 &&
     progressFraction(Number.NaN, 100) === 0,
     'invalid progress inputs should be safe');
+
+const normalizedTimeline = normalizePanelTimeline({
+    startMs: 0,
+    endMs: 3000,
+    positionMs: 0,
+    playbackRate: 0,
+});
+assert(normalizedTimeline?.playbackRate === 1 &&
+    normalizePanelTimeline({
+        startMs: 1000,
+        endMs: 1000,
+        positionMs: 1000,
+    }) === null,
+'panel timelines should normalize playback rate and reject empty ranges');
+assert(panelTimelinesEqual(normalizedTimeline, {...normalizedTimeline}) &&
+    !panelTimelinesEqual(normalizedTimeline, {
+        ...normalizedTimeline,
+        positionMs: 1,
+    }),
+'panel timeline equality should include the playback anchor');
+
+const fastPan = panelPanState(normalizedTimeline, 0, 429);
+assert(fastPan.delayMs === 360 && fastPan.durationMs === 2040 &&
+    Math.abs(fastPan.speedPxPerSecond - 210.294) < 0.01 &&
+    fastPan.shouldAnimate,
+'a three-second line should reserve 12% at the start and 20% at the end');
+const seekPan = panelPanState({
+    startMs: 0,
+    endMs: 5000,
+    positionMs: 3000,
+    playbackRate: 1,
+}, 3000, 429);
+assert(Math.abs(seekPan.initialX - -429 * 2400 / 3400) < 0.01 &&
+    seekPan.delayMs === 0 && seekPan.durationMs === 1000,
+'a seek should map directly to its lyric-time horizontal position');
+const finishedPan = panelPanState(normalizedTimeline, 2500, 429);
+assert(finishedPan.initialX === -429 && !finishedPan.shouldAnimate,
+'the lyric should remain at its end during the reserved tail hold');
+const doubleRatePan = panelPanState({
+    ...normalizedTimeline,
+    playbackRate: 2,
+}, 0, 429);
+assert(doubleRatePan.delayMs === 180 && doubleRatePan.durationMs === 1020,
+'playback rate should scale wall-clock delay and motion duration');
+assert(panelPanState(null, 0, 429) === null &&
+    panelPanState(normalizedTimeline, 0, 0) === null,
+'invalid panel pan inputs should remain static');
 
 assert(getLineVisualLevel(5, 5).name === 'current' &&
     getLineVisualLevel(4, 5).opacity === 184 &&
@@ -61,4 +111,4 @@ assert(comfortableScrollTarget({
     force: true,
 }) === 0, 'forced positioning should clamp at the beginning');
 
-print('UI duration and progress tests passed');
+print('UI duration, progress, panel pan and lyric layout tests passed');

@@ -56,6 +56,20 @@ export default class MprisLyricsPreferences extends ExtensionPreferences {
         page.add(panelGroup);
         panelGroup.add(bindSwitch(
             settings, 'show-icon', 'Show music note icon'));
+        const panelPositionRow = comboRow(
+            settings,
+            'panel-position',
+            'Panel position',
+            [
+                {value: 'left', label: 'Left'},
+                {value: 'right', label: 'Right'},
+                {value: 'center', label: 'Center'},
+                {value: 'far-left', label: 'Far left'},
+                {value: 'far-right', label: 'Far right'},
+            ]);
+        panelPositionRow.subtitle =
+            'Left and Right stay near the center; Far positions use the outer edge';
+        panelGroup.add(panelPositionRow);
 
         const widthRow = new Adw.SpinRow({
             title: 'Maximum panel width',

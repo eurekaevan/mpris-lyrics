@@ -1,6 +1,7 @@
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import GObject from 'gi://GObject';
 import Meta from 'gi://Meta';
 import Pango from 'gi://Pango';
 import St from 'gi://St';
@@ -13,6 +14,9 @@ import {
     comfortableScrollTarget,
     formatDuration,
     getLineVisualLevel,
+    normalizePanelTimeline,
+    panelPanState,
+    panelTimelinesEqual,
     progressFraction,
 } from './ui-utils.js';
 
@@ -73,6 +77,70 @@ function setButtonEnabled(button, enabled) {
         button.remove_style_pseudo_class('insensitive');
     else
         button.add_style_pseudo_class('insensitive');
+}
+
+class PanelLabelLayout extends Clutter.LayoutManager {
+    static {
+        GObject.registerClass(this);
+    }
+
+    _init() {
+        super._init();
+        this._panLabel = null;
+        this._panWidth = 0;
+    }
+
+    setPanLabel(label) {
+        this._panLabel = label;
+    }
+
+    setPanWidth(width) {
+        const nextWidth = Math.max(0, Number(width) || 0);
+        if (Math.abs(this._panWidth - nextWidth) < 0.5)
+            return;
+        this._panWidth = nextWidth;
+        this.layout_changed();
+    }
+
+    vfunc_get_preferred_width(container, forHeight) {
+        let naturalWidth = 0;
+        for (const child of container) {
+            const [, childNaturalWidth] =
+                child.get_preferred_width(forHeight);
+            naturalWidth = Math.max(naturalWidth, childNaturalWidth);
+        }
+        return [0, naturalWidth];
+    }
+
+    vfunc_get_preferred_height(container, forWidth) {
+        let minimumHeight = 0;
+        let naturalHeight = 0;
+        for (const child of container) {
+            const childWidth = child === this._panLabel && this._panWidth > 0
+                ? this._panWidth
+                : forWidth;
+            const [childMinimumHeight, childNaturalHeight] =
+                child.get_preferred_height(childWidth);
+            minimumHeight = Math.max(minimumHeight, childMinimumHeight);
+            naturalHeight = Math.max(naturalHeight, childNaturalHeight);
+        }
+        return [minimumHeight, naturalHeight];
+    }
+
+    vfunc_allocate(container, box) {
+        const viewportWidth = Math.max(0, box.get_width());
+        const viewportHeight = Math.max(0, box.get_height());
+        for (const child of container) {
+            const childBox = new Clutter.ActorBox();
+            childBox.set_origin(0, 0);
+            childBox.set_size(
+                child === this._panLabel && this._panWidth > 0
+                    ? Math.max(viewportWidth, this._panWidth)
+                    : viewportWidth,
+                viewportHeight);
+            child.allocate(childBox);
+        }
+    }
 }
 
 class PlaybackProgressView {
@@ -227,6 +295,16 @@ export class LyricsIndicator {
         this._scrollRequest = null;
         this._layoutAnchorSignalId = 0;
         this._layoutAnchorAdjustment = null;
+        this._panelPanLaterId = 0;
+        this._panelPanScrollable = false;
+        this._panelPanTimeline = null;
+        this._panelPanTimelineAnchorUs = 0;
+        this._panelTextKey = null;
+        this._panelPanTargetX = 0;
+        this._panelPanPaused = false;
+        this._panelPlaying = false;
+        this._panelHovered = false;
+        this._panelViewportWidth = 0;
         this._maxPanelWidth = 500;
         this._showIcon = true;
         this._laters = global.compositor.get_laters();
@@ -247,12 +325,53 @@ export class LyricsIndicator {
             style_class: 'mpris-lyrics-panel-label',
             text: '',
             x_expand: true,
+            x_align: Clutter.ActorAlign.FILL,
             y_align: Clutter.ActorAlign.CENTER,
             y_expand: true,
         });
         configureEllipsized(this._label);
+        this._panelPanLabel = new St.Label({
+            style_class: 'mpris-lyrics-panel-label',
+            text: '',
+            x_align: Clutter.ActorAlign.START,
+            y_align: Clutter.ActorAlign.CENTER,
+            y_expand: true,
+            visible: false,
+        });
+        this._panelPanLabel.clutter_text.set_ellipsize(
+            Pango.EllipsizeMode.NONE);
+        this._panelPanLabel.clutter_text.set_single_line_mode(true);
+        this._panelLabelLayout = new PanelLabelLayout();
+        this._panelLabelLayout.setPanLabel(this._panelPanLabel);
+        this._labelViewport = new St.Widget({
+            style_class: 'mpris-lyrics-panel-label-viewport',
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+            y_expand: true,
+            clip_to_allocation: true,
+            layout_manager: this._panelLabelLayout,
+        });
+        this._labelViewport.add_child(this._label);
+        this._labelViewport.add_child(this._panelPanLabel);
+        this._labelViewport.connect('notify::allocation', () => {
+            const width = Math.round(this._labelViewport.width);
+            if (width === this._panelViewportWidth)
+                return;
+            this._panelViewportWidth = width;
+            this._schedulePanelPan();
+        });
+        this.actor.connect('enter-event', () => {
+            this._panelHovered = true;
+            this._pausePanelPan();
+            return Clutter.EVENT_PROPAGATE;
+        });
+        this.actor.connect('leave-event', () => {
+            this._panelHovered = false;
+            this._resumePanelPan();
+            return Clutter.EVENT_PROPAGATE;
+        });
         this._panelBox.add_child(this._icon);
-        this._panelBox.add_child(this._label);
+        this._panelBox.add_child(this._labelViewport);
         this.actor.add_child(this._panelBox);
 
         this._buildMenu();
@@ -448,12 +567,32 @@ export class LyricsIndicator {
         this._showLyricsMessage('No synchronized lyrics');
     }
 
-    setText(text) {
-        if (!this._label || this._label.text === text)
+    setText(text, {
+        scrollable = false,
+        timeline = null,
+        contentKey = null,
+    } = {}) {
+        const canScroll = Boolean(scrollable);
+        const normalizedTimeline = normalizePanelTimeline(timeline);
+        const timelineChanged = !panelTimelinesEqual(
+            this._panelPanTimeline, normalizedTimeline);
+        this._panelPanTimeline = normalizedTimeline;
+        this._panelPanTimelineAnchorUs = GLib.get_monotonic_time();
+        if (!this._label ||
+            (this._label.text === text &&
+                this._panelPanScrollable === canScroll &&
+                this._panelTextKey === contentKey)) {
+            if (this._label && timelineChanged)
+                this._schedulePanelPan();
             return;
+        }
 
+        this._cancelPanelPan();
+        this._panelPanScrollable = canScroll;
+        this._panelTextKey = contentKey;
         this._label.remove_all_transitions();
         this._label.text = text;
+        this._panelPanLabel.text = text;
         if (!this._label.mapped || !this._animationsEnabled()) {
             this._label.opacity = 255;
             return;
@@ -465,6 +604,7 @@ export class LyricsIndicator {
             duration: PANEL_TEXT_FADE_MS,
             mode: Clutter.AnimationMode.EASE_OUT_QUAD,
         });
+        this._schedulePanelPan();
     }
 
     setTrack(metadata, trackKey) {
@@ -496,9 +636,15 @@ export class LyricsIndicator {
 
     setProgress(positionUs, durationUs, options = {}) {
         this._progressView?.setProgress(positionUs, durationUs, options);
+        this._setPanelPlaying(Boolean(options.playing));
     }
 
     clearTrack() {
+        this._panelPanScrollable = false;
+        this._panelPanTimeline = null;
+        this._panelPanTimelineAnchorUs = 0;
+        this._panelTextKey = null;
+        this._setPanelPlaying(false);
         this._titleLabel.text = '';
         this._artistLabel.text = '';
         this._albumLabel.text = '';
@@ -760,9 +906,13 @@ export class LyricsIndicator {
             return;
 
         if (visible) {
+            const wasVisible = this.actor.visible;
             this.actor.container.show();
             this.actor.show();
+            if (!wasVisible)
+                this._schedulePanelPan();
         } else {
+            this._cancelPanelPan();
             this.actor.hide();
             this.actor.container.hide();
         }
@@ -806,17 +956,130 @@ export class LyricsIndicator {
     }
 
     _applyPanelWidth() {
-        if (!this._label || !this._panelBox)
+        if (!this._labelViewport || !this._panelBox)
             return;
         const reservedForIcon = this._showIcon ? 22 : 0;
         const preferredWidth = Math.min(
             PANEL_PREFERRED_WIDTH, this._maxPanelWidth);
         const labelWidth = Math.max(1,
             preferredWidth - reservedForIcon);
-        this._panelBox.set_style(
-            `width: ${preferredWidth}px; ` +
-            `max-width: ${this._maxPanelWidth}px;`);
-        this._label.set_style(`max-width: ${labelWidth}px;`);
+        this._panelBox.natural_width = preferredWidth;
+        this._panelBox.set_style(`max-width: ${this._maxPanelWidth}px;`);
+        this._labelViewport.set_style(`max-width: ${labelWidth}px;`);
+        this._schedulePanelPan();
+    }
+
+    _setPanelPlaying(playing) {
+        if (this._panelPlaying === playing)
+            return;
+        const nowUs = GLib.get_monotonic_time();
+        if (this._panelPanTimeline) {
+            this._panelPanTimeline = {
+                ...this._panelPanTimeline,
+                positionMs: this._panelPanPositionAt(nowUs),
+            };
+            this._panelPanTimelineAnchorUs = nowUs;
+        }
+        this._panelPlaying = playing;
+        this._schedulePanelPan();
+    }
+
+    _schedulePanelPan() {
+        this._cancelPanelPan();
+        if (!this._panelPanScrollable || !this._panelPanTimeline ||
+            !this._animationsEnabled() || !this._labelViewport?.mapped)
+            return;
+
+        this._panelPanLaterId = this._laters.add(
+            Meta.LaterType.IDLE,
+            () => {
+                this._panelPanLaterId = 0;
+                this._startPanelPan();
+                return GLib.SOURCE_REMOVE;
+            });
+    }
+
+    _startPanelPan() {
+        if (!this._panelPanScrollable || !this._panelPanTimeline ||
+            !this._animationsEnabled() || !this._labelViewport?.mapped)
+            return;
+
+        const [, naturalWidth] =
+            this._panelPanLabel.get_preferred_width(-1);
+        const viewportWidth = this._labelViewport.width;
+        const overflow = Math.ceil(naturalWidth - viewportWidth);
+        if (!(viewportWidth > 0) || overflow <= 1)
+            return;
+
+        const panState = panelPanState(
+            this._panelPanTimeline, this._panelPanPositionAt(), overflow);
+        if (!panState)
+            return;
+
+        this._panelLabelLayout.setPanWidth(naturalWidth);
+        this._panelPanLabel.translation_x = panState.initialX;
+        this._panelPanLabel.show();
+        this._label.hide();
+        this._panelPanTargetX = panState.targetX;
+        const shouldAnimate = this._panelPlaying && panState.shouldAnimate;
+        if (shouldAnimate) {
+            this._panelPanLabel.ease({
+                translation_x: this._panelPanTargetX,
+                delay: panState.delayMs,
+                duration: panState.durationMs,
+                mode: Clutter.AnimationMode.LINEAR,
+            });
+        }
+        if (this._panelHovered && shouldAnimate)
+            this._pausePanelPan();
+    }
+
+    _panelPanPositionAt(nowUs = GLib.get_monotonic_time()) {
+        const timeline = this._panelPanTimeline;
+        if (!timeline)
+            return 0;
+        const elapsedMs = this._panelPlaying &&
+            this._panelPanTimelineAnchorUs > 0
+            ? Math.max(0, nowUs - this._panelPanTimelineAnchorUs) / 1000 *
+                timeline.playbackRate
+            : 0;
+        return Math.min(timeline.endMs, timeline.positionMs + elapsedMs);
+    }
+
+    _cancelPanelPan() {
+        if (this._panelPanLaterId && this._laters) {
+            this._laters.remove(this._panelPanLaterId);
+            this._panelPanLaterId = 0;
+        }
+        this._panelPanLabel?.remove_all_transitions();
+        if (this._panelPanLabel) {
+            this._panelPanLabel.translation_x = 0;
+            this._panelPanLabel.hide();
+        }
+        this._panelLabelLayout?.setPanWidth(0);
+        this._panelPanTargetX = 0;
+        this._panelPanPaused = false;
+        this._label?.show();
+    }
+
+    _pausePanelPan() {
+        const transition =
+            this._panelPanLabel?.get_transition('translation-x');
+        if (!transition)
+            return;
+        const currentX = this._panelPanLabel.translation_x;
+        this._panelPanLabel.remove_transition('translation-x');
+        this._panelPanLabel.translation_x = currentX;
+        this._panelPanPaused =
+            currentX > this._panelPanTargetX + 0.5;
+    }
+
+    _resumePanelPan() {
+        if (!this._panelPanPaused || !this._panelPlaying ||
+            !this._panelPanLabel?.visible)
+            return;
+        this._panelPanPaused = false;
+        this._schedulePanelPan();
     }
 
     _clearLyricsRows() {
@@ -1018,6 +1281,7 @@ export class LyricsIndicator {
     }
 
     destroy() {
+        this._cancelPanelPan();
         this._cancelScheduledScroll();
         this._cancelLayoutAnchor();
         this._label?.remove_all_transitions();
@@ -1034,6 +1298,10 @@ export class LyricsIndicator {
         this._panelBox = null;
         this._icon = null;
         this._label = null;
+        this._panelPanLabel = null;
+        this._panelLabelLayout = null;
+        this._labelViewport = null;
+        this._panelPanTimeline = null;
         this._titleLabel = null;
         this._artistLabel = null;
         this._albumLabel = null;

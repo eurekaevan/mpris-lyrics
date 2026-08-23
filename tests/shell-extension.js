@@ -1,6 +1,7 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
+import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as Scripting from 'resource:///org/gnome/shell/ui/scripting.js';
@@ -79,6 +80,7 @@ export async function run() {
         'the extension should own the registered panel indicator');
     const settings = instance._settings;
     assert(settings.get_boolean('show-icon') &&
+        settings.get_string('panel-position') === 'center' &&
         settings.get_int('max-panel-width') === 500 &&
         !settings.get_boolean('hide-when-paused') &&
         settings.get_boolean('fallback-track-info') &&
@@ -92,10 +94,29 @@ export async function run() {
         settings.get_int('global-offset-ms') === 0 &&
         settings.get_string('preferred-player') === 'auto',
     'the packaged GSettings schema should expose the Phase 5 defaults');
-    assert(view._panelBox.get_style().includes('width: 320px') &&
+    assert(view._panelBox.natural_width === 320 &&
+        view._panelBox.natural_width_set &&
+        !view._panelBox.get_style().includes('width: 320px') &&
         view._panelBox.get_style().includes('max-width: 500px') &&
-        view._label.get_style().includes('298px') && view._icon.visible,
-        'the default maximum panel width should apply immediately');
+        view._labelViewport.get_style().includes('298px') &&
+        view._labelViewport.clip_to_allocation && view._icon.visible &&
+        Main.panel._centerBox.contains(indicator.container),
+        'the default preferred and maximum panel widths should apply immediately');
+
+    const assertPanelPosition = (value, panelBox, expectedIndex) => {
+        settings.set_string('panel-position', value);
+        assert(indicator.container.get_parent() === panelBox &&
+            panelBox.get_child_at_index(expectedIndex(panelBox)) ===
+                indicator.container,
+        `panel-position ${value} should move the existing indicator container`);
+    };
+    assertPanelPosition('far-left', Main.panel._leftBox, () => 0);
+    assertPanelPosition('left', Main.panel._leftBox,
+        box => box.get_n_children() - 1);
+    assertPanelPosition('right', Main.panel._rightBox, () => 0);
+    assertPanelPosition('far-right', Main.panel._rightBox,
+        box => box.get_n_children() - 1);
+    assertPanelPosition('center', Main.panel._centerBox, () => 0);
 
     const localArtwork = Gio.File.new_for_path(
         '/usr/share/pixmaps/faces/guitar2.jpg');
@@ -155,6 +176,128 @@ export async function run() {
         Math.abs(finalShortPanel.center - shortPanel.center) < 1 &&
         Math.abs(longPanel.iconX - shortPanel.iconX) < 1,
     'short and long panel lyrics should keep a stable width, center, and icon');
+
+    settings.set_string('panel-position', 'far-left');
+    const centerConstraint = new St.Widget({
+        width: Math.round(Main.layoutManager.primaryMonitor.width * 0.65),
+    });
+    Main.panel._centerBox.add_child(centerConstraint);
+    view.setText(
+        'A long lyric must yield before it reaches the centered date control');
+    await Scripting.sleep(300);
+    const [panelX] = view._panelBox.get_transformed_position();
+    const [centerX] = Main.panel._centerBox.get_transformed_position();
+    print(`constrainedLeftPanel=${view._panelBox.width.toFixed(1)},` +
+        `gap=${(centerX - panelX - view._panelBox.width).toFixed(1)}`);
+    assert(view._panelBox.width < shortPanel.width &&
+        panelX + view._panelBox.width <= centerX + 0.5,
+    'a side-positioned lyric should shrink before the centered panel area');
+
+    settings.set_string('panel-position', 'far-right');
+    await Scripting.sleep(300);
+    const [rightPanelX] = view._panelBox.get_transformed_position();
+    const [rightCenterX] = Main.panel._centerBox.get_transformed_position();
+    const centerRight = rightCenterX + Main.panel._centerBox.width;
+    print(`constrainedRightPanel=${view._panelBox.width.toFixed(1)},` +
+        `gap=${(rightPanelX - centerRight).toFixed(1)}`);
+    assert(view._panelBox.width < shortPanel.width &&
+        rightPanelX >= centerRight - 0.5,
+    'a right-positioned lyric should shrink after the centered panel area');
+
+    centerConstraint.destroy();
+    settings.set_string('panel-position', 'center');
+    view.setText('Synchronized lyric line 21 with wrapping text');
+    await Scripting.sleep(300);
+
+    const panningText =
+        'This synchronized lyric is deliberately long enough to pan from its beginning all the way to its ending';
+    const panelTimeline = (endMs, positionMs = 0, playbackRate = 1) => ({
+        startMs: 0,
+        endMs,
+        positionMs,
+        playbackRate,
+    });
+    view.setText(panningText, {
+        scrollable: true,
+        timeline: panelTimeline(5000),
+    });
+    view.setProgress(119_000_000, 220_000_000, {
+        playing: true,
+        immediate: true,
+    });
+    await Scripting.sleep(950);
+    const firstPanX = view._panelPanLabel.translation_x;
+    const [, panNaturalWidth] =
+        view._panelPanLabel.get_preferred_width(-1);
+    print(`panelPanWidths=natural:${panNaturalWidth.toFixed(1)},` +
+        `actor:${view._panelPanLabel.width.toFixed(1)},` +
+        `viewport:${view._labelViewport.width.toFixed(1)}`);
+    assert(view._panelPanLabel.visible && !view._label.visible &&
+        firstPanX < 0 &&
+        Math.abs(view._panelPanLabel.width - panNaturalWidth) < 0.5 &&
+        view._panelPanLabel.width > view._labelViewport.width &&
+        view._panelPanLabel.get_transition('translation-x'),
+    'an overflowing synchronized lyric should pan at full width inside its clipped viewport');
+    view._pausePanelPan();
+    await Scripting.sleep(180);
+    const pausedPanX = view._panelPanLabel.translation_x;
+    assert(Math.abs(pausedPanX - firstPanX) < 0.5,
+        'hover-style pause should freeze the panel lyric pan in place');
+    view._resumePanelPan();
+    await Scripting.sleep(180);
+    assert(view._panelPanLabel.translation_x < pausedPanX,
+        'leaving hover should resume the panel lyric pan');
+    view.setText(panningText, {
+        scrollable: true,
+        timeline: panelTimeline(5000),
+        contentKey: 'repeated-line-2',
+    });
+    assert(view._panelPanLabel.translation_x === 0 &&
+        !view._panelPanLabel.visible && view._label.visible,
+    'a repeated lyric with a new line ID should still reset the old panel pan');
+    view.setText('The next line', {
+        scrollable: true,
+        timeline: panelTimeline(3000),
+    });
+    assert(view._panelPanLabel.translation_x === 0 &&
+        !view._panelPanLabel.visible && view._label.visible,
+    'a line change should cancel the old panel pan and reset to the new start');
+    view.setText(panningText, {scrollable: false});
+    await Scripting.sleep(120);
+    assert(!view._panelPanLabel.visible && view._label.visible,
+        'fallback track information should remain ellipsized without panning');
+    view.setText(panningText, {
+        scrollable: true,
+        timeline: panelTimeline(1800),
+        contentKey: 'full-ending',
+    });
+    await Scripting.sleep(1520);
+    const [panEndX] = view._panelPanLabel.get_transformed_position();
+    const [viewportEndX] = view._labelViewport.get_transformed_position();
+    const panRight = panEndX + view._panelPanLabel.width;
+    const viewportRight = viewportEndX + view._labelViewport.width;
+    print(`panelPanEndDelta=${(panRight - viewportRight).toFixed(1)}`);
+    assert(view._panelPanLabel.clutter_text.get_text() === panningText &&
+        Math.abs(panRight - viewportRight) <= 1.5,
+    'the completed panel pan should reveal the exact full lyric ending');
+
+    view.setProgress(119_000_000, 220_000_000, {playing: false});
+    view.setText(panningText, {
+        scrollable: true,
+        timeline: panelTimeline(5000, 3000),
+        contentKey: 'seek-position',
+    });
+    await Scripting.sleep(100);
+    const seekOverflow = panNaturalWidth - view._labelViewport.width;
+    const expectedSeekX = -seekOverflow * ((3000 - 600) / 3400);
+    print(`panelPanSeekDelta=${(
+        view._panelPanLabel.translation_x - expectedSeekX).toFixed(1)}`);
+    assert(view._panelPanLabel.visible &&
+        !view._panelPanLabel.get_transition('translation-x') &&
+        Math.abs(view._panelPanLabel.translation_x - expectedSeekX) <= 1.5,
+    'a paused seek should immediately anchor the panel pan to lyric time');
+
+    view.setProgress(119_000_000, 220_000_000, {playing: false});
     view.setText('Synchronized lyric line 21 with wrapping text');
 
     assert(view._titleLabel.text.startsWith('A deliberately'),
@@ -364,8 +507,22 @@ export async function run() {
     'the native player submenu row should separate its secondary label and value');
 
     const screenshotPath = GLib.getenv('MPRIS_LYRICS_SCREENSHOT_PATH');
+    const screenshotPanelText = GLib.getenv(
+        'MPRIS_LYRICS_SCREENSHOT_PANEL_TEXT');
+    const screenshotPanelPosition = GLib.getenv(
+        'MPRIS_LYRICS_SCREENSHOT_PANEL_POSITION');
+    if (screenshotPanelPosition)
+        settings.set_string('panel-position', screenshotPanelPosition);
+    if (screenshotPanelText) {
+        view.setText(screenshotPanelText);
+        await Scripting.sleep(180);
+    }
     if (screenshotPath)
         await takeScreenshot(screenshotPath);
+    if (screenshotPanelText)
+        view.setText('Synchronized lyric line 21 with wrapping text');
+    if (screenshotPanelPosition)
+        settings.set_string('panel-position', 'center');
 
     const comfortableValue = view._scrollView.vadjustment.value;
     const comfortablePage = view._scrollView.vadjustment.page_size;
@@ -376,11 +533,12 @@ export async function run() {
         `current:${(currentBounds.y2 - currentBounds.y1).toFixed(1)},` +
         `near:${(nextBounds.y2 - nextBounds.y1).toFixed(1)},` +
         `far:${(distantBounds.y2 - distantBounds.y1).toFixed(1)}`);
-    assert(currentBounds.y2 - currentBounds.y1 >
+    assert(comfortablePage <= 300 &&
+        currentBounds.y2 - currentBounds.y1 >
         nextBounds.y2 - nextBounds.y1 &&
         nextBounds.y2 - nextBounds.y1 >
         distantBounds.y2 - distantBounds.y1,
-    'current and nearby lyrics should retain progressively more breathing room');
+    'the compact viewport should retain progressive lyric breathing room');
     print(`comfortableFractions=${(((currentBounds.y1 + currentBounds.y2) / 2 -
         comfortableValue) / comfortablePage).toFixed(2)},${(((nextBounds.y1 +
         nextBounds.y2) / 2 - comfortableValue) / comfortablePage).toFixed(2)}`);
@@ -630,8 +788,13 @@ export async function run() {
     view.setTrack(offsetMetadata);
     view.setLyrics(wordDocument);
     instance._updateIndicatorAndSchedule(true);
-    assert(instance._wordTimerId !== 0 && view._label.text === markupText,
-        'an open popup should arm one next-boundary word timer');
+    assert(instance._wordTimerId !== 0 && view._label.text === markupText &&
+        view._panelPanScrollable &&
+        view._panelPanTimeline?.startMs === 0 &&
+        view._panelPanTimeline?.endMs === 3000 &&
+        view._panelPanTimeline?.positionMs === 1750 &&
+        view._panelPanTimeline?.playbackRate === 1,
+        'a synchronized line should arm its word timer and panel timeline');
     fakePositionUs = 2_250_000;
     instance._updateWordAndSchedule();
     assert(view._label.text === markupText,
@@ -652,8 +815,11 @@ export async function run() {
     };
     instance._lyricsDocument = offsetDocument;
     instance._updateIndicatorAndSchedule(true);
-    assert(instance._wordTimerId === 0,
-        'pause should cancel the word timer');
+    assert(instance._wordTimerId === 0 &&
+        view._panelPanTimeline?.startMs === 1000 &&
+        view._panelPanTimeline?.endMs === 2000 &&
+        view._panelPanTimeline?.positionMs === 1750,
+        'pause should cancel the word timer and preserve the lyric-time anchor');
     const offsetRows = [...view._lyricRows];
     instance._updateIndicatorAndSchedule(true);
     assert(instance._currentLyricIndex === 0,
@@ -698,11 +864,11 @@ export async function run() {
 
     settings.set_boolean('show-icon', false);
     assert(view._label.text === 'First' && !view._icon.visible &&
-        view._label.get_style().includes('320px'),
+        view._labelViewport.get_style().includes('320px'),
     'show-icon should hide only the symbolic icon and release its width');
     settings.set_boolean('show-icon', true);
     assert(view._label.text === 'First' && view._icon.visible &&
-        view._label.get_style().includes('298px'),
+        view._labelViewport.get_style().includes('298px'),
     'show-icon should restore the symbolic icon without changing lyric text');
 
     settings.set_boolean('word-sync-enabled', false);
@@ -742,9 +908,14 @@ export async function run() {
 
     settings.set_int('max-panel-width', 640);
     assert(view._panelBox.get_style().includes('640px') &&
-        view._panelBox.get_style().includes('width: 320px') &&
-        view._label.get_style().includes('298px'),
+        view._panelBox.natural_width === 320 &&
+        view._labelViewport.get_style().includes('298px'),
         'maximum panel width should update without extension restart');
+    settings.set_int('max-panel-width', 200);
+    assert(view._panelBox.get_style().includes('200px') &&
+        view._panelBox.natural_width === 200 &&
+        view._labelViewport.get_style().includes('178px'),
+        'a configured maximum below the preferred width should cap both widths');
     settings.set_int('max-panel-width', 500);
 
     const viewAnimationPreference = view._animationsEnabled;
@@ -757,8 +928,15 @@ export async function run() {
         immediate: true,
     });
     view.setProgress(10_010_000, 220_000_000, {playing: true});
-    assert(view._label.opacity === 255 && !view._progressView._animateFill,
-        'disabled Shell animations should make text and progress updates direct');
+    view.setText(panningText, {
+        scrollable: true,
+        timeline: panelTimeline(5000),
+    });
+    await Scripting.sleep(80);
+    assert(view._label.opacity === 255 && !view._progressView._animateFill &&
+        view._label.visible && !view._panelPanLabel.visible &&
+        !view._panelPanLabel.get_transition('translation-x'),
+    'disabled Shell animations should keep text, panel pan, and progress direct');
     view._animationsEnabled = viewAnimationPreference;
     view._progressView._animationsEnabled = progressAnimationPreference;
     view.setText('First');
@@ -816,7 +994,8 @@ export async function run() {
     view.setLyrics(plainDocument);
     settings.set_boolean('fallback-track-info', false);
     assert(indicator.visible && instance._currentLyricIndex === -1 &&
-        view._label.text === 'Offset Test — Paused Artist',
+        view._label.text === 'Offset Test — Paused Artist' &&
+        !view._panelPanScrollable,
     'plain lyrics should keep a static popup entry without pretending to sync');
     settings.set_boolean('fallback-track-info', true);
     instance._lyricsDocument = null;

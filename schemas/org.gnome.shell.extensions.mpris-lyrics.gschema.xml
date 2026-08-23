@@ -6,6 +6,17 @@
       <default>true</default>
       <summary>Show the music note icon</summary>
     </key>
+    <key name="panel-position" type="s">
+      <choices>
+        <choice value="left"/>
+        <choice value="right"/>
+        <choice value="center"/>
+        <choice value="far-left"/>
+        <choice value="far-right"/>
+      </choices>
+      <default>'center'</default>
+      <summary>Position of the lyrics indicator in the top panel</summary>
+    </key>
     <key name="max-panel-width" type="i">
       <range min="150" max="1000"/>
       <default>500</default>

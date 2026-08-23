@@ -24,6 +24,79 @@ export function progressFraction(positionUs, durationUs) {
     return Math.min(1, Math.max(0, position / duration));
 }
 
+const PANEL_PAN_LEAD_FRACTION = 0.12;
+const PANEL_PAN_END_HOLD_FRACTION = 0.20;
+const PANEL_PAN_MAX_LEAD_MS = 600;
+const PANEL_PAN_MAX_END_HOLD_MS = 1000;
+
+export function normalizePanelTimeline(timeline) {
+    const startMs = timeline?.startMs;
+    const endMs = timeline?.endMs;
+    const positionMs = timeline?.positionMs;
+    const playbackRate = timeline?.playbackRate;
+    if (![startMs, endMs, positionMs].every(Number.isFinite) ||
+        endMs <= startMs)
+        return null;
+
+    return {
+        startMs,
+        endMs,
+        positionMs,
+        playbackRate: Number.isFinite(playbackRate) && playbackRate > 0
+            ? playbackRate
+            : 1,
+    };
+}
+
+export function panelTimelinesEqual(first, second) {
+    if (!first || !second)
+        return first === second;
+    return first.startMs === second.startMs &&
+        first.endMs === second.endMs &&
+        first.positionMs === second.positionMs &&
+        first.playbackRate === second.playbackRate;
+}
+
+export function panelPanState(timeline, positionMs, overflow) {
+    const normalized = normalizePanelTimeline(timeline);
+    const position = Number(positionMs);
+    const distance = Number(overflow);
+    if (!normalized || !Number.isFinite(position) ||
+        !Number.isFinite(distance) || distance <= 0)
+        return null;
+
+    const lineDurationMs = normalized.endMs - normalized.startMs;
+    const leadMs = Math.min(
+        PANEL_PAN_MAX_LEAD_MS,
+        lineDurationMs * PANEL_PAN_LEAD_FRACTION);
+    const endHoldMs = Math.min(
+        PANEL_PAN_MAX_END_HOLD_MS,
+        lineDurationMs * PANEL_PAN_END_HOLD_FRACTION);
+    const motionStartMs = normalized.startMs + leadMs;
+    const motionEndMs = Math.max(
+        motionStartMs, normalized.endMs - endHoldMs);
+    const motionDurationMs = Math.max(1, motionEndMs - motionStartMs);
+    const progress = Math.min(1, Math.max(0,
+        (position - motionStartMs) / motionDurationMs));
+    const initialX = -distance * progress;
+    const targetX = -distance;
+    const delayMs = Math.max(0, Math.round(
+        (motionStartMs - position) / normalized.playbackRate));
+    const durationMs = Math.max(1, Math.round(
+        (motionEndMs - Math.max(position, motionStartMs)) /
+        normalized.playbackRate));
+    const remainingDistance = Math.abs(targetX - initialX);
+
+    return {
+        initialX,
+        targetX,
+        delayMs,
+        durationMs,
+        speedPxPerSecond: remainingDistance / durationMs * 1000,
+        shouldAnimate: position < motionEndMs && remainingDistance > 0.5,
+    };
+}
+
 const LINE_VISUAL_LEVELS = Object.freeze({
     static: Object.freeze({name: 'static', opacity: 224}),
     far: Object.freeze({name: 'far', opacity: 107}),

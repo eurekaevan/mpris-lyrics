@@ -19,10 +19,35 @@ const MIN_LYRICS_OFFSET_MS = -10_000;
 const MAX_LYRICS_OFFSET_MS = 10_000;
 const PROGRESS_UPDATE_INTERVAL_MS = 500;
 const MPRIS_NO_TRACK_ID = '/org/mpris/MediaPlayer2/TrackList/NoTrack';
+const DEFAULT_PANEL_POSITION = 'center';
+const PANEL_PLACEMENTS = Object.freeze({
+    'far-left': Object.freeze({boxName: 'left', atEnd: false}),
+    left: Object.freeze({boxName: 'left', atEnd: true}),
+    center: Object.freeze({boxName: 'center', atEnd: false}),
+    right: Object.freeze({boxName: 'right', atEnd: false}),
+    'far-right': Object.freeze({boxName: 'right', atEnd: true}),
+});
+
+function panelPlacement(position) {
+    return PANEL_PLACEMENTS[position] ??
+        PANEL_PLACEMENTS[DEFAULT_PANEL_POSITION];
+}
 
 function trackInfo(metadata) {
     const suffix = metadata.artist ? ` — ${metadata.artist}` : '';
     return `${metadata.title}${suffix}`;
+}
+
+function explicitLineEndMs(line) {
+    if (Number.isFinite(line?.endMs) && line.endMs > line.startMs)
+        return line.endMs;
+
+    for (let index = (line?.words?.length ?? 0) - 1; index >= 0; index--) {
+        const endMs = line.words[index].endMs;
+        if (Number.isFinite(endMs) && endMs > line.startMs)
+            return endMs;
+    }
+    return null;
 }
 
 function playbackTrackIdentity(state) {
@@ -75,6 +100,7 @@ export default class MprisLyricsExtension extends Extension {
             'translation-display-mode');
         this._panelLyricsLanguage = this._settings.get_string(
             'panel-lyrics-language');
+        this._panelPosition = this._settings.get_string('panel-position');
         this._connectSettings();
 
         this._offsetStore = new OffsetStore({
@@ -100,7 +126,16 @@ export default class MprisLyricsExtension extends Extension {
         this._indicator.setShowIcon(
             this._settings.get_boolean('show-icon'));
         this._indicator.setOffsets(0, this._globalOffsetMs);
-        Main.panel.addToStatusArea(this.uuid, this._indicator.actor, 0, 'center');
+        const placement = panelPlacement(this._panelPosition);
+        const panelBox = this._panelBox(placement.boxName);
+        const panelIndex = placement.atEnd
+            ? panelBox.get_n_children()
+            : 0;
+        Main.panel.addToStatusArea(
+            this.uuid,
+            this._indicator.actor,
+            panelIndex,
+            placement.boxName);
 
         this._lyricsProvider = new LyricsProvider();
         this._translationService = new TranslationService();
@@ -154,6 +189,7 @@ export default class MprisLyricsExtension extends Extension {
         this._translationEnabled = false;
         this._translationDisplayMode = 'bilingual';
         this._panelLyricsLanguage = 'original';
+        this._panelPosition = DEFAULT_PANEL_POSITION;
         this._settings = null;
     }
 
@@ -167,6 +203,10 @@ export default class MprisLyricsExtension extends Extension {
             this._indicator?.setShowIcon(
                 this._settings.get_boolean('show-icon'));
             this._updateIndicatorAndSchedule(true);
+        });
+        connect('panel-position', () => {
+            this._moveIndicator(
+                this._settings.get_string('panel-position'));
         });
         connect('max-panel-width', () => {
             this._indicator?.setMaxPanelWidth(
@@ -247,6 +287,28 @@ export default class MprisLyricsExtension extends Extension {
                 console.warn(`MPRIS Lyrics: could not clear runtime cache: ${error.message}`);
             });
         });
+    }
+
+    _panelBox(boxName) {
+        return Main.panel[`_${boxName}Box`];
+    }
+
+    _moveIndicator(position) {
+        this._panelPosition = PANEL_PLACEMENTS[position]
+            ? position
+            : DEFAULT_PANEL_POSITION;
+        const container = this._indicator?.actor?.container;
+        if (!container)
+            return;
+
+        const placement = panelPlacement(this._panelPosition);
+        const targetBox = this._panelBox(placement.boxName);
+        this._indicator.actor.menu.close();
+        container.get_parent()?.remove_child(container);
+        const targetIndex = placement.atEnd
+            ? targetBox.get_n_children()
+            : 0;
+        targetBox.insert_child_at_index(container, targetIndex);
     }
 
     _onPlayerStateChanged(state) {
@@ -507,7 +569,11 @@ export default class MprisLyricsExtension extends Extension {
         let panelContent = fallbackEnabled
             ? trackInfo(this._state.metadata)
             : null;
+        let panelContentIsLyric = false;
+        let panelContentKey = null;
+        let currentLine = null;
         let nextLineStartMs = null;
+        let lineEndMs = null;
         const document = this._lyricsDocument;
         const effectivePositionMs = this._effectivePositionMs();
 
@@ -518,15 +584,18 @@ export default class MprisLyricsExtension extends Extension {
         } else if (document && document.syncLevel !== SyncLevel.NONE) {
             const index = LyricsSynchronizer.currentLineIndex(
                 document, effectivePositionMs);
-            const currentLine = index >= 0 ? document.lines[index] : null;
+            currentLine = index >= 0 ? document.lines[index] : null;
             const translated = currentLine &&
                 this._panelLyricsLanguage === 'translated'
                 ? this._translationDocument?.lines?.find(line =>
                     line.lineId === currentLine.lineId)?.text
                 : null;
             const line = translated || currentLine?.text || null;
-            if (line)
+            if (line) {
                 panelContent = line;
+                panelContentIsLyric = true;
+                panelContentKey = currentLine.lineId;
+            }
 
             if (forceText || index !== this._currentLyricIndex) {
                 this._currentLyricIndex = index;
@@ -536,6 +605,16 @@ export default class MprisLyricsExtension extends Extension {
             }
             nextLineStartMs = LyricsSynchronizer.nextLineStartMs(
                 document, index);
+            lineEndMs = nextLineStartMs ?? explicitLineEndMs(currentLine);
+            if (lineEndMs === null && currentLine) {
+                const durationMs = Number(
+                    this._state.metadata.durationUs) / 1000;
+                const effectiveTrackEndMs = durationMs +
+                    this._globalOffsetMs + this._trackOffsetMs;
+                if (Number.isFinite(effectiveTrackEndMs) &&
+                    effectiveTrackEndMs > currentLine.startMs)
+                    lineEndMs = effectiveTrackEndMs;
+            }
         } else if (document?.lines?.length) {
             // Static lyrics still need an entry point to their popup. They do
             // not masquerade as synchronized text in the panel.
@@ -547,8 +626,37 @@ export default class MprisLyricsExtension extends Extension {
             this._indicator.setCurrentLyricIndex(-1);
         }
 
-        if (panelContent)
-            this._indicator.setText(this._panelText(panelContent));
+        if (panelContent) {
+            let panelTimeline = null;
+            if (panelContentIsLyric && currentLine &&
+                Number.isFinite(lineEndMs) &&
+                lineEndMs > currentLine.startMs) {
+                let playbackRate = 1;
+                const remainingLyricMs = lineEndMs - effectivePositionMs;
+                if (this._state.playbackStatus === 'Playing' &&
+                    remainingLyricMs > 0) {
+                    const offsetMs = this._globalOffsetMs +
+                        this._trackOffsetMs;
+                    const wallRemainingMs = this._mprisManager
+                        .getDelayUntilPositionUs(
+                            (lineEndMs - offsetMs) * 1000);
+                    if (Number.isFinite(wallRemainingMs) &&
+                        wallRemainingMs > 0)
+                        playbackRate = remainingLyricMs / wallRemainingMs;
+                }
+                panelTimeline = {
+                    startMs: currentLine.startMs,
+                    endMs: lineEndMs,
+                    positionMs: effectivePositionMs,
+                    playbackRate,
+                };
+            }
+            this._indicator.setText(this._panelText(panelContent), {
+                scrollable: panelContentIsLyric,
+                timeline: panelTimeline,
+                contentKey: panelContentKey,
+            });
+        }
 
         const hiddenWhilePaused =
             this._settings.get_boolean('hide-when-paused') &&

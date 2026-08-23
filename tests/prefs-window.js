@@ -73,8 +73,8 @@ application.connect('activate', async app => {
                     .length === 2,
                 'preferences should contain width and global-offset SpinRows');
                 assert(widgets.filter(widget => widget instanceof Adw.ComboRow)
-                    .length === 3,
-                'preferences should expose popup, panel, and provider choices');
+                    .length === 4,
+                'preferences should expose position, popup, panel, and provider choices');
                 assert(widgets.filter(widget => widget instanceof Adw.EntryRow)
                     .length === 1,
                 'preferences should expose one arbitrary target-language entry');

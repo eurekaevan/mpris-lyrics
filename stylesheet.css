@@ -8,8 +8,13 @@
   icon-size: 16px;
 }
 
+.mpris-lyrics-panel-label,
+.mpris-lyrics-panel-label-viewport {
+  min-width: 1px;
+}
+
 .mpris-lyrics-panel-label {
-  text-align: center;
+  text-align: left;
 }
 
 .mpris-lyrics-menu {
@@ -96,7 +101,7 @@
 }
 
 .mpris-lyrics-scroll {
-  max-height: 24em;
+  max-height: 18em;
 }
 
 .mpris-lyrics-scroll StScrollBar > .vhandle {

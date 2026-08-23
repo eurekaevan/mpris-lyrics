@@ -92,8 +92,9 @@ export async function run() {
         settings.get_int('global-offset-ms') === 0 &&
         settings.get_string('preferred-player') === 'auto',
     'the packaged GSettings schema should expose the Phase 5 defaults');
-    assert(view._panelBox.get_style().includes('500px') &&
-        view._label.get_style().includes('476px') && view._icon.visible,
+    assert(view._panelBox.get_style().includes('width: 320px') &&
+        view._panelBox.get_style().includes('max-width: 500px') &&
+        view._label.get_style().includes('298px') && view._icon.visible,
         'the default maximum panel width should apply immediately');
 
     const localArtwork = Gio.File.new_for_path(
@@ -105,6 +106,8 @@ export async function run() {
         artUrl: localArtwork.get_uri(),
         durationUs: 220_000_000,
     }, 'shell-track-a');
+    assert(view._messageLabel.text === 'Loading lyrics…',
+        'a track change should show the restrained loading state');
     const lines = Array.from({length: 30}, (_unused, index) => ({
         lineId: `line-${index}`,
         startMs: index * 1000,
@@ -128,6 +131,32 @@ export async function run() {
     view.setVisible(true);
     await Scripting.sleep(1800);
 
+    const panelMetrics = async text => {
+        view.setText(text);
+        await Scripting.sleep(180);
+        const [x] = view._panelBox.get_transformed_position();
+        const [iconX] = view._icon.get_transformed_position();
+        return {
+            width: view._panelBox.width,
+            center: x + view._panelBox.width / 2,
+            iconX,
+        };
+    };
+    const shortPanel = await panelMetrics('Hello');
+    const longPanel = await panelMetrics(
+        'This is an extremely long synchronized lyric line that must ellipsize');
+    const finalShortPanel = await panelMetrics('I know');
+    print(`panelWidths=${shortPanel.width.toFixed(1)},` +
+        `${longPanel.width.toFixed(1)},${finalShortPanel.width.toFixed(1)}`);
+    print(`panelCenterDelta=${(longPanel.center - shortPanel.center).toFixed(1)},` +
+        `iconDelta=${(longPanel.iconX - shortPanel.iconX).toFixed(1)}`);
+    assert(shortPanel.width === 320 && longPanel.width === shortPanel.width &&
+        Math.abs(finalShortPanel.width - shortPanel.width) < 1 &&
+        Math.abs(finalShortPanel.center - shortPanel.center) < 1 &&
+        Math.abs(longPanel.iconX - shortPanel.iconX) < 1,
+    'short and long panel lyrics should keep a stable width, center, and icon');
+    view.setText('Synchronized lyric line 21 with wrapping text');
+
     assert(view._titleLabel.text.startsWith('A deliberately'),
         'the popup should show the track title');
     assert(view._artistLabel.text === 'Test Artist',
@@ -135,8 +164,10 @@ export async function run() {
     assert(view._albumLabel.text === 'Test Album' && view._albumLabel.visible,
         'the popup should show a present album');
     assert(view._artworkView._displayedTrackKey === 'shell-track-a' &&
+        view._artworkView.actor.width === 80 &&
+        view._artworkView.actor.height === 80 &&
         !view._artworkView._fallback.visible,
-    'file:// artwork should decode asynchronously and replace its placeholder');
+    'the compact file:// artwork should decode and replace its matching placeholder');
 
     const raceLoader = {
         load(url) {
@@ -157,10 +188,38 @@ export async function run() {
     Main.uiGroup.add_child(raceArtwork.actor);
     raceArtwork.setArtwork('file:///delayed/a', 'track-a');
     raceArtwork.setArtwork('file:///fast/b', 'track-b');
-    await Scripting.sleep(300);
+    await Scripting.sleep(80);
     assert(raceArtwork._displayedTrackKey === 'track-b',
         'late artwork from track A must never overwrite track B');
+    const oldArtworkActor = raceArtwork._textureActor;
+    raceArtwork.setArtwork('file:///delayed/a', 'track-c');
+    await Scripting.sleep(60);
+    assert(raceArtwork._textureActor === oldArtworkActor &&
+        !raceArtwork._fallback.visible,
+    'a delayed replacement should retain old artwork instead of flashing fallback');
+    await Scripting.sleep(150);
+    assert(raceArtwork._displayedTrackKey === 'track-c' &&
+        raceArtwork._textureActor !== oldArtworkActor &&
+        raceArtwork._outgoingTextureActor === oldArtworkActor,
+    'decoded artwork should crossfade from the retained texture');
+    await Scripting.sleep(250);
+    assert(!raceArtwork._outgoingTextureActor,
+        'a completed artwork crossfade should release the old texture');
     raceArtwork.destroy();
+
+    const reducedArtwork = new ArtworkView({
+        loader: raceLoader,
+        animationsEnabled: () => false,
+    });
+    Main.uiGroup.add_child(reducedArtwork.actor);
+    reducedArtwork.setArtwork('file:///fast/b', 'reduced-a');
+    await Scripting.sleep(80);
+    reducedArtwork.setArtwork('file:///fast/b', 'reduced-b');
+    await Scripting.sleep(80);
+    assert(reducedArtwork._displayedTrackKey === 'reduced-b' &&
+        !reducedArtwork._outgoingTextureActor,
+    'reduced motion should replace ready artwork without crossfade');
+    reducedArtwork.destroy();
 
     assert(view._progressView._currentLabel.text === '1:59' &&
         view._progressView._durationLabel.text === '3:40' &&
@@ -178,9 +237,9 @@ export async function run() {
         album: '',
     });
     assert(view._artistLabel.clutter_text.get_single_line_mode() &&
-        !view._albumLabel.visible &&
+        !view._albumLabel.visible && view._albumLabel.text === '' &&
         view._lyricRows.every((row, index) => row === originalRows[index]),
-    'long or missing display metadata must not widen or rebuild the lyrics view');
+    'long or missing metadata must hide the empty album without rebuilding lyrics');
     view.updateMetadataDisplay({
         title: 'A deliberately very long title used to exercise ellipsizing',
         artist: 'Test Artist',
@@ -189,10 +248,13 @@ export async function run() {
     assert(view._lyricRows.length === lines.length,
         'the popup should create one row per parsed lyric entry');
     assert(view._lyricRows[20].has_style_class_name(
-        'mpris-lyrics-line-active'),
-        'the current lyric row should have the active class');
-    assert(view._lyricRows[20].has_style_pseudo_class('selected'),
-        'the current lyric row should use the native selected state');
+        'mpris-lyrics-line-current') && view._lyricRows[20].opacity === 255 &&
+        view._lyricRows[19].has_style_class_name('mpris-lyrics-line-near') &&
+        view._lyricRows[18].has_style_class_name('mpris-lyrics-line-mid') &&
+        view._lyricRows[17].has_style_class_name('mpris-lyrics-line-far'),
+    'the current lyric should drive centralized distance-based visual levels');
+    assert(!view._lyricRows[20].has_style_pseudo_class('selected'),
+        'lyric focus must not depend on a card-like selected background');
     assert(view._label.text.startsWith('Synchronized lyric'),
         'the top-bar lyric should still update');
 
@@ -209,6 +271,10 @@ export async function run() {
     'bilingual rows should align by line ID and treat translation as plain text');
     assert(view._lyricRows.every((row, index) => row === originalRows[index]),
         'translation arrival must not rebuild lyric rows');
+    view.setTranslationState('network_error');
+    assert(view._translationStatusLabel.text === 'Translation network error',
+        'translation failure should remain a compact secondary state');
+    view.setTranslationState('available');
     view.setTranslationDisplayMode('translated');
     assert(!view._lyricLabels[20].visible &&
         view._translationLabels[20].visible &&
@@ -228,20 +294,114 @@ export async function run() {
         'an open popup should run one low-frequency progress timer');
     assert(view._scrollView.vadjustment.value > 0,
         'opening the popup should scroll a later current row into view');
+    const anchorRow = view._lyricRows[20];
+    const [, anchorY] = anchorRow.get_transformed_position();
+    view.setTranslation({
+        lines: lines.map((line, index) => ({
+            lineId: line.lineId,
+            text: index === 20
+                ? '第 21 行安全译文 · مرحبا'
+                : `第 ${index + 1} 行译文`,
+        })),
+    });
+    await Scripting.sleep(120);
+    const [, anchoredY] = anchorRow.get_transformed_position();
+    print(`translationAnchorDelta=${(anchoredY - anchorY).toFixed(1)}`);
+    assert(view._lyricRows.every((row, index) => row === originalRows[index]) &&
+        Math.abs(anchoredY - anchorY) < 1.5,
+    'late translation should update existing rows and preserve the current line position');
+
+    const popupWidth = view.actor.menu.box.width;
+    const headerHeight = view._artworkView.actor.get_parent().height;
+    print(`mediaHeader=${headerHeight.toFixed(1)},` +
+        `artwork=${view._artworkView.actor.width.toFixed(1)}x` +
+        `${view._artworkView.actor.height.toFixed(1)}`);
+    view.updateMetadataDisplay({title: 'Short', artist: 'Artist', album: ''});
+    await Scripting.sleep(80);
+    view.updateMetadataDisplay({
+        title: 'An extremely long title that deliberately wraps across the full two-line title allowance',
+        artist: 'An artist name long enough to require ellipsizing',
+        album: 'An album name long enough to require ellipsizing',
+    });
+    await Scripting.sleep(80);
+    assert(headerHeight === 80 && view.actor.menu.box.width === popupWidth &&
+        view._artworkView.actor.get_parent().height === headerHeight,
+    'short, long, and missing metadata should keep popup/header geometry stable');
+    view.updateMetadataDisplay({
+        title: 'A deliberately very long title used to exercise ellipsizing',
+        artist: 'Test Artist',
+        album: 'Test Album',
+    });
+
+    view.setProgress(60_000_000, 220_000_000, {
+        playing: true,
+        immediate: true,
+    });
+    await Scripting.sleep(520);
+    view.setProgress(60_500_000, 220_000_000, {playing: true});
+    assert(view._progressView._animateFill,
+        'normal playing progress should interpolate between 500ms updates');
+    view.setProgress(150_000_000, 220_000_000, {playing: true});
+    assert(!view._progressView._animateFill,
+        'a seek-sized progress jump should cancel interpolation and reposition');
+    view.setProgress(150_000_000, 220_000_000, {playing: false});
+    assert(!view._progressView._animateFill,
+        'paused progress should remain fixed without an active interpolation');
+    view.setProgress(119_000_000, 220_000_000, {immediate: true});
+    await Scripting.sleep(80);
+    assert(Math.abs(view._progressView._fill.scale_x - 119 / 220) < 0.0001 &&
+        Math.abs(view._progressView._fill.width -
+            view._progressView._track.width) < 0.5,
+        'an immediate progress update should cancel old fraction transitions');
+
+    view.setPlayers([{
+        stableId: 'desktop:firefox',
+        displayName: 'Mozilla Firefox',
+        selected: true,
+    }], 'auto');
+    assert(view._playerMenu.label.clutter_text.get_text() ===
+        'Player   Mozilla Firefox',
+    'the native player submenu row should separate its secondary label and value');
+
     const screenshotPath = GLib.getenv('MPRIS_LYRICS_SCREENSHOT_PATH');
     if (screenshotPath)
         await takeScreenshot(screenshotPath);
 
+    const comfortableValue = view._scrollView.vadjustment.value;
+    const comfortablePage = view._scrollView.vadjustment.page_size;
+    const currentBounds = view._rowVerticalBounds(view._lyricRows[20]);
+    const nextBounds = view._rowVerticalBounds(view._lyricRows[21]);
+    const distantBounds = view._rowVerticalBounds(view._lyricRows[23]);
+    print(`lyricLayout=viewport:${comfortablePage.toFixed(1)},` +
+        `current:${(currentBounds.y2 - currentBounds.y1).toFixed(1)},` +
+        `near:${(nextBounds.y2 - nextBounds.y1).toFixed(1)},` +
+        `far:${(distantBounds.y2 - distantBounds.y1).toFixed(1)}`);
+    assert(currentBounds.y2 - currentBounds.y1 >
+        nextBounds.y2 - nextBounds.y1 &&
+        nextBounds.y2 - nextBounds.y1 >
+        distantBounds.y2 - distantBounds.y1,
+    'current and nearby lyrics should retain progressively more breathing room');
+    print(`comfortableFractions=${(((currentBounds.y1 + currentBounds.y2) / 2 -
+        comfortableValue) / comfortablePage).toFixed(2)},${(((nextBounds.y1 +
+        nextBounds.y2) / 2 - comfortableValue) / comfortablePage).toFixed(2)}`);
     view.setCurrentLyricIndex(21);
-    await Scripting.sleep(100);
+    await Scripting.sleep(260);
+    print(`comfortableScrollDelta=${(view._scrollView.vadjustment.value -
+        comfortableValue).toFixed(1)}`);
     assert(view._lyricRows.every((row, index) => row === originalRows[index]),
         'a lyric change must reuse the existing row objects');
     assert(!view._lyricRows[20].has_style_class_name(
-        'mpris-lyrics-line-active'),
-        'the previous row should lose the active class');
+        'mpris-lyrics-line-current'),
+        'the previous row should lose the current class');
     assert(view._lyricRows[21].has_style_class_name(
-        'mpris-lyrics-line-active'),
-        'the new row should gain the active class');
+        'mpris-lyrics-line-current'),
+        'the new row should gain the current class');
+    assert(Math.abs(view._scrollView.vadjustment.value - comfortableValue) < 1,
+        'an adjacent line inside the comfortable zone should not scroll');
+    view.setCurrentLyricIndex(29, {reposition: true});
+    await Scripting.sleep(60);
+    assert(view._scrollView.vadjustment.value > comfortableValue,
+        'a seek should immediately reposition to the latest distant line');
 
     const markupText = '<b>safe</b> & שלום 世界!';
     const wordDocument = {
@@ -500,7 +660,7 @@ export async function run() {
         'the paused position should select the first lyric');
     view._increaseButton.emit('clicked', 1);
     assert(instance._trackOffsetMs === 500 &&
-        view._offsetLabel.text === '+0.5 s',
+        view._offsetLabel.text === '+0.5 s' && view._resetButton.visible,
         'popup buttons should adjust the current track offset');
     assert(instance._currentLyricIndex === 1 &&
         view._label.text === 'Second',
@@ -513,8 +673,9 @@ export async function run() {
         'a track offset should clamp to +10 seconds');
     view._resetButton.emit('clicked', 1);
     assert(instance._currentLyricIndex === 0 &&
+        view._resetButton.visible && !view._resetButton.reactive &&
         view._lyricRows.every((row, index) => row === offsetRows[index]),
-        'offset recalculation should keep and reuse the lyric row objects');
+        'offset reset should dim in place and reuse the lyric row objects');
 
     instance._setTrackOffsetMs(1000);
     const secondMetadata = {...offsetMetadata, title: 'Offset Test B'};
@@ -537,11 +698,11 @@ export async function run() {
 
     settings.set_boolean('show-icon', false);
     assert(view._label.text === 'First' && !view._icon.visible &&
-        view._label.get_style().includes('500px'),
+        view._label.get_style().includes('320px'),
     'show-icon should hide only the symbolic icon and release its width');
     settings.set_boolean('show-icon', true);
     assert(view._label.text === 'First' && view._icon.visible &&
-        view._label.get_style().includes('476px'),
+        view._label.get_style().includes('298px'),
     'show-icon should restore the symbolic icon without changing lyric text');
 
     settings.set_boolean('word-sync-enabled', false);
@@ -581,9 +742,26 @@ export async function run() {
 
     settings.set_int('max-panel-width', 640);
     assert(view._panelBox.get_style().includes('640px') &&
-        view._label.get_style().includes('616px'),
+        view._panelBox.get_style().includes('width: 320px') &&
+        view._label.get_style().includes('298px'),
         'maximum panel width should update without extension restart');
     settings.set_int('max-panel-width', 500);
+
+    const viewAnimationPreference = view._animationsEnabled;
+    const progressAnimationPreference = view._progressView._animationsEnabled;
+    view._animationsEnabled = () => false;
+    view._progressView._animationsEnabled = () => false;
+    view.setText('Reduced motion');
+    view.setProgress(10_000_000, 220_000_000, {
+        playing: true,
+        immediate: true,
+    });
+    view.setProgress(10_010_000, 220_000_000, {playing: true});
+    assert(view._label.opacity === 255 && !view._progressView._animateFill,
+        'disabled Shell animations should make text and progress updates direct');
+    view._animationsEnabled = viewAnimationPreference;
+    view._progressView._animationsEnabled = progressAnimationPreference;
+    view.setText('First');
 
     settings.set_boolean('hide-when-paused', true);
     assert(!indicator.visible,
@@ -594,7 +772,7 @@ export async function run() {
 
     view.setPlayers(availablePlayers, 'auto');
     assert(view._playerMenu.menu.numMenuItems === 3 &&
-        view._playerMenu.label.text === 'Player: Firefox',
+        view._playerMenu.label.clutter_text.get_text() === 'Player   Firefox',
     'the popup should list Auto and only currently available stable players');
     view._playerMenu.menu._getMenuItems()[1].activate(null);
     assert(settings.get_string('preferred-player') === 'desktop:firefox' &&
@@ -643,6 +821,17 @@ export async function run() {
     settings.set_boolean('fallback-track-info', true);
     instance._lyricsDocument = null;
 
+    view.setLyrics({
+        source: 'test-instrumental',
+        sourceId: null,
+        instrumental: true,
+        metadata: {},
+        syncLevel: 'none',
+        lines: [],
+    });
+    assert(view._messageLabel.text === 'Instrumental',
+        'instrumental should use one restrained centered line');
+
     view.setTrack({
         title: 'No Lyrics Track',
         artist: 'Another Artist',
@@ -652,10 +841,10 @@ export async function run() {
     }, 'no-artwork-track');
     view.setLyrics(null);
     assert(view._lyricRows.length === 0 &&
-        view._messageLabel.text === 'No lyrics found',
+        view._messageLabel.text === 'No synchronized lyrics',
         'the popup should show the no-lyrics result');
-    assert(!view._albumLabel.visible,
-        'an absent album should not leave an empty metadata row');
+    assert(!view._albumLabel.visible && view._albumLabel.text === '',
+        'an absent album should stay hidden without artificial fallback text');
     assert(view._artworkView._fallback.visible,
         'invalid artwork should retain the symbolic fallback');
     view.setArtwork(Gio.File.new_for_path('/etc/hostname').get_uri(),

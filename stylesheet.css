@@ -1,5 +1,7 @@
+/* Spacing scale: XS 4px, S 6px, M 12px, L 18px, XL 24px. */
+
 .mpris-lyrics-panel {
-  spacing: 7px;
+  spacing: 6px;
 }
 
 .mpris-lyrics-panel-icon {
@@ -7,67 +9,65 @@
 }
 
 .mpris-lyrics-panel-label {
-  text-align: left;
+  text-align: center;
 }
 
 .mpris-lyrics-menu {
-  width: 440px;
-  max-width: 480px;
+  width: 456px;
+  max-width: 456px;
 }
 
 .mpris-lyrics-media-section {
-  padding: 16px;
+  padding: 16px 18px 10px;
 }
 
 .mpris-lyrics-media-header {
-  spacing: 14px;
+  spacing: 12px;
 }
 
-.mpris-lyrics-artwork {
-  width: 96px;
-  height: 96px;
+.mpris-lyrics-artwork,
+.mpris-lyrics-artwork-placeholder {
+  width: 80px;
+  height: 80px;
 }
 
-.mpris-lyrics-artwork-fallback {
-  width: 96px;
-  height: 96px;
+.mpris-lyrics-artwork-placeholder {
   border-radius: 10px;
-  background-color: st-transparentize(-st-accent-color, 0.9);
+  background-color: st-transparentize(currentColor, 0.9);
 }
 
 .mpris-lyrics-artwork-fallback-icon {
-  color: -st-accent-color;
-  opacity: 0.72;
+  icon-size: 30px;
+  opacity: 0.46;
 }
 
 .mpris-lyrics-metadata {
-  padding-top: 2px;
-  padding-bottom: 2px;
+  height: 80px;
 }
 
-.mpris-lyrics-track-title {
-  max-height: 3em;
-  font-size: 1.18em;
+.mpris-lyrics-title {
+  height: 2.4em;
+  max-height: 2.4em;
+  font-size: 1.14em;
   font-weight: 650;
 }
 
-.mpris-lyrics-track-artist {
-  margin-top: 7px;
+.mpris-lyrics-artist {
+  margin-top: 4px;
+  min-height: 1.1em;
+  font-size: 0.98em;
   opacity: 0.82;
 }
 
-.mpris-lyrics-track-album {
-  margin-top: 3px;
-  font-size: 0.92em;
+.mpris-lyrics-album {
+  margin-top: 2px;
+  min-height: 1em;
+  font-size: 0.88em;
   opacity: 0.58;
 }
 
 .mpris-lyrics-progress {
-  margin-top: 14px;
-}
-
-.mpris-lyrics-progress-track {
-  height: 4px;
+  margin-top: 10px;
 }
 
 .mpris-lyrics-progress-track,
@@ -77,7 +77,7 @@
 }
 
 .mpris-lyrics-progress-track {
-  background-color: st-transparentize(-st-accent-color, 0.76);
+  background-color: st-transparentize(-st-accent-color, 0.82);
 }
 
 .mpris-lyrics-progress-fill {
@@ -85,9 +85,10 @@
 }
 
 .mpris-lyrics-progress-time {
-  margin-top: 6px;
+  margin-top: 4px;
   font-size: 0.83em;
-  opacity: 0.62;
+  font-feature-settings: "tnum";
+  opacity: 0.58;
 }
 
 .mpris-lyrics-scroll-item {
@@ -95,40 +96,60 @@
 }
 
 .mpris-lyrics-scroll {
-  max-height: 27em;
+  max-height: 24em;
+}
+
+.mpris-lyrics-scroll StScrollBar > .vhandle {
+  opacity: 0.42;
+}
+
+.mpris-lyrics-scroll StScrollBar > .vhandle:hover {
+  opacity: 0.72;
+}
+
+.mpris-lyrics-scroll StScrollBar > .vhandle:active {
+  opacity: 0.9;
 }
 
 .mpris-lyrics-lines {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.mpris-lyrics-line {
+  padding: 2px 18px;
+}
+
+.mpris-lyrics-line-near {
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.mpris-lyrics-line-current {
   padding-top: 7px;
   padding-bottom: 7px;
 }
 
-.mpris-lyrics-line {
-  padding: 8px 16px;
-  opacity: 0.56;
+.mpris-lyrics-original {
+  font-size: 1em;
+  font-weight: normal;
 }
 
-.mpris-lyrics-line-nearby {
-  opacity: 0.76;
-}
-
-.mpris-lyrics-line-active {
-  padding-top: 11px;
-  padding-bottom: 11px;
-  font-size: 1.08em;
-  font-weight: bold;
-  opacity: 1;
+.mpris-lyrics-line-current .mpris-lyrics-original {
+  font-size: 1.14em;
+  font-weight: 650;
 }
 
 .mpris-lyrics-translation {
-  margin-top: 5px;
-  font-size: 0.9em;
+  margin-top: 3px;
+  font-size: 0.88em;
   font-weight: normal;
-  opacity: 0.62;
+  opacity: 0.74;
 }
 
-.mpris-lyrics-line-active .mpris-lyrics-translation {
-  opacity: 0.78;
+.mpris-lyrics-line-current .mpris-lyrics-translation {
+  font-size: 0.94em;
+  opacity: 0.8;
 }
 
 .mpris-lyrics-translation-only {
@@ -137,60 +158,78 @@
   opacity: 1;
 }
 
+.mpris-lyrics-line-current .mpris-lyrics-translation-only {
+  font-size: 1.12em;
+  font-weight: 650;
+  opacity: 1;
+}
+
 .mpris-lyrics-translation-status {
-  padding-top: 7px;
-  padding-bottom: 7px;
-  opacity: 0.74;
+  padding: 6px 18px;
+  font-size: 0.88em;
+  opacity: 0.62;
 }
 
 .mpris-lyrics-translation-button {
-  margin-left: 10px;
+  margin-left: 12px;
+  opacity: 0.8;
 }
 
 .mpris-lyrics-message {
-  padding: 34px 20px;
-  opacity: 0.66;
+  padding: 24px 18px;
+  opacity: 0.62;
 }
 
 .mpris-lyrics-offset {
-  padding-top: 7px;
-  padding-bottom: 7px;
+  padding: 8px 18px;
 }
 
 .mpris-lyrics-footer {
-  spacing: 3px;
+  spacing: 4px;
 }
 
-.mpris-lyrics-offset-controls {
-  spacing: 7px;
+.mpris-lyrics-offset-heading {
+  spacing: 10px;
 }
 
 .mpris-lyrics-offset-title {
-  opacity: 0.72;
+  font-size: 0.82em;
+  opacity: 0.55;
+}
+
+.mpris-lyrics-offset-controls {
+  spacing: 8px;
 }
 
 .mpris-lyrics-offset-button {
-  padding: 5px;
-  min-width: 22px;
-  min-height: 22px;
-}
-
-.mpris-lyrics-offset-button StIcon {
-  icon-size: 14px;
+  padding: 3px 6px;
+  font-size: 0.82em;
+  opacity: 0.65;
 }
 
 .mpris-lyrics-offset-label {
   min-width: 4.5em;
+  font-size: 0.86em;
   font-feature-settings: "tnum";
+  opacity: 0.72;
 }
 
 .mpris-lyrics-reset-button {
-  padding-left: 8px;
-  padding-right: 8px;
+  padding: 3px 6px;
+  font-size: 0.8em;
+  opacity: 0.68;
+}
+
+.mpris-lyrics-reset-button:insensitive {
+  opacity: 0.28;
 }
 
 .mpris-lyrics-effective-offset {
-  margin-top: 2px;
-  font-size: 0.84em;
-  opacity: 0.55;
+  font-size: 0.78em;
+  opacity: 0.46;
+}
+
+.mpris-lyrics-player {
+  padding-top: 8px;
+  padding-bottom: 8px;
 }

@@ -319,7 +319,9 @@ export default class MprisLyricsExtension extends Extension {
         }
 
         this._indicator.setProgress(
-            state.positionUs, state.metadata.durationUs);
+            state.positionUs,
+            state.metadata.durationUs,
+            {playing: state.playbackStatus === 'Playing'});
         this._updateIndicatorAndSchedule(true);
     }
 
@@ -485,7 +487,8 @@ export default class MprisLyricsExtension extends Extension {
             return;
         this._indicator.setProgress(
             this._mprisManager.getPositionUs(),
-            this._state.metadata.durationUs);
+            this._state.metadata.durationUs,
+            {playing: this._state.playbackStatus === 'Playing'});
     }
 
     _effectivePositionMs() {
@@ -527,7 +530,9 @@ export default class MprisLyricsExtension extends Extension {
 
             if (forceText || index !== this._currentLyricIndex) {
                 this._currentLyricIndex = index;
-                this._indicator.setCurrentLyricIndex(index);
+                this._indicator.setCurrentLyricIndex(index, {
+                    reposition: forceText,
+                });
             }
             nextLineStartMs = LyricsSynchronizer.nextLineStartMs(
                 document, index);

@@ -42,38 +42,41 @@ function comboRow(settings, key, title, choices) {
 
 export default class MprisLyricsPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
+        const _ = this.gettext.bind(this);
+        const ngettext = this.ngettext.bind(this);
         const settings = this.getSettings();
         const signalIds = [];
+        const cancellable = new Gio.Cancellable();
         window.search_enabled = true;
 
         const page = new Adw.PreferencesPage({
-            title: 'General',
+            title: _('General'),
             icon_name: 'preferences-system-symbolic',
         });
         window.add(page);
 
-        const panelGroup = new Adw.PreferencesGroup({title: 'Panel'});
+        const panelGroup = new Adw.PreferencesGroup({title: _('Panel')});
         page.add(panelGroup);
         panelGroup.add(bindSwitch(
-            settings, 'show-icon', 'Show music note icon'));
+            settings, 'show-icon', _('Show music note icon')));
         const panelPositionRow = comboRow(
             settings,
             'panel-position',
-            'Panel position',
+            _('Panel position'),
             [
-                {value: 'left', label: 'Left'},
-                {value: 'right', label: 'Right'},
-                {value: 'center', label: 'Center'},
-                {value: 'far-left', label: 'Far left'},
-                {value: 'far-right', label: 'Far right'},
+                {value: 'left', label: _('Left')},
+                {value: 'right', label: _('Right')},
+                {value: 'center', label: _('Center')},
+                {value: 'far-left', label: _('Far left')},
+                {value: 'far-right', label: _('Far right')},
             ]);
         panelPositionRow.subtitle =
-            'Left and Right stay near the center; Far positions use the outer edge';
+            _('Left and Right stay near the center; Far positions use the outer edge');
         panelGroup.add(panelPositionRow);
 
         const widthRow = new Adw.SpinRow({
-            title: 'Maximum panel width',
-            subtitle: 'Maximum width of lyrics in the top bar',
+            title: _('Maximum panel width'),
+            subtitle: _('Maximum width of lyrics in the top bar'),
             adjustment: new Gtk.Adjustment({
                 lower: 150,
                 upper: 1000,
@@ -96,24 +99,24 @@ export default class MprisLyricsPreferences extends ExtensionPreferences {
         panelGroup.add(bindSwitch(
             settings,
             'hide-when-paused',
-            'Hide lyrics when paused',
-            'Keep the popup state while hiding the panel item'));
+            _('Hide lyrics when paused'),
+            _('Keep the popup state while hiding the panel item')));
 
-        const lyricsGroup = new Adw.PreferencesGroup({title: 'Lyrics'});
+        const lyricsGroup = new Adw.PreferencesGroup({title: _('Lyrics')});
         page.add(lyricsGroup);
         lyricsGroup.add(bindSwitch(
             settings,
             'fallback-track-info',
-            'Show title when lyrics are unavailable'));
+            _('Show title when lyrics are unavailable')));
         lyricsGroup.add(bindSwitch(
             settings,
             'word-sync-enabled',
-            'Word-synced highlighting',
-            'Highlight the current word when timing is available'));
+            _('Word-synced highlighting'),
+            _('Highlight the current word when timing is available')));
 
         const globalOffsetRow = new Adw.SpinRow({
-            title: 'Global lyrics offset',
-            subtitle: 'Added to each track-specific offset',
+            title: _('Global lyrics offset'),
+            subtitle: _('Added to each track-specific offset'),
             adjustment: new Gtk.Adjustment({
                 lower: -10,
                 upper: 10,
@@ -135,27 +138,27 @@ export default class MprisLyricsPreferences extends ExtensionPreferences {
         }));
 
         const translationGroup = new Adw.PreferencesGroup({
-            title: 'Translation',
-            description: 'Translations are aligned by lyric line and never change original timing.',
+            title: _('Translation'),
+            description: _('Translations are aligned by lyric line and never change original timing.'),
         });
         page.add(translationGroup);
         translationGroup.add(bindSwitch(
             settings,
             'translation-enabled',
-            'Enable translation',
-            'Original lyrics remain available if translation fails'));
+            _('Enable translation'),
+            _('Original lyrics remain available if translation fails')));
         translationGroup.add(bindSwitch(
             settings,
             'auto-translate',
-            'Translate automatically',
-            'Use a cached translation first; otherwise contact the provider'));
+            _('Translate automatically'),
+            _('Use a cached translation first; otherwise contact the provider')));
 
         const targetLanguageRow = new Adw.EntryRow({
-            title: 'Target language',
+            title: _('Target language'),
             text: settings.get_string('translation-target-language'),
         });
         targetLanguageRow.add_suffix(new Gtk.Label({
-            label: 'e.g. zh-CN, en, ja',
+            label: _('e.g. zh-CN, en, ja'),
             css_classes: ['dim-label'],
         }));
         settings.bind(
@@ -168,34 +171,34 @@ export default class MprisLyricsPreferences extends ExtensionPreferences {
         translationGroup.add(comboRow(
             settings,
             'translation-display-mode',
-            'Popup display',
+            _('Popup display'),
             [
-                {value: 'bilingual', label: 'Original + Translation'},
-                {value: 'original', label: 'Original only'},
-                {value: 'translated', label: 'Translation only'},
+                {value: 'bilingual', label: _('Original + Translation')},
+                {value: 'original', label: _('Original only')},
+                {value: 'translated', label: _('Translation only')},
             ]));
         translationGroup.add(comboRow(
             settings,
             'panel-lyrics-language',
-            'Panel lyrics',
+            _('Panel lyrics'),
             [
-                {value: 'original', label: 'Original'},
-                {value: 'translated', label: 'Translation'},
+                {value: 'original', label: _('Original')},
+                {value: 'translated', label: _('Translation')},
             ]));
         const providerRow = comboRow(
             settings,
             'translation-provider',
-            'Provider',
+            _('Provider'),
             [{value: 'openai', label: 'OpenAI'}]);
         translationGroup.add(providerRow);
 
         const credentialStore = new TranslationCredentialStore();
         const credentialRow = new Adw.ActionRow({
-            title: 'Translation API key',
-            subtitle: 'Checking Secret Service…',
+            title: _('Translation API key'),
+            subtitle: _('Checking Secret Service…'),
         });
         const configureCredentialButton = new Gtk.Button({
-            label: 'Configure',
+            label: _('Configure'),
             valign: Gtk.Align.CENTER,
         });
         credentialRow.add_suffix(configureCredentialButton);
@@ -204,13 +207,16 @@ export default class MprisLyricsPreferences extends ExtensionPreferences {
         const refreshCredentialStatus = async () => {
             try {
                 const configured = await credentialStore.isConfigured(
-                    settings.get_string('translation-provider'));
+                    settings.get_string('translation-provider'), cancellable);
+                if (cancellable.is_cancelled())
+                    return false;
                 credentialRow.subtitle = configured
-                    ? 'Configured in GNOME Secret Service'
-                    : 'Not configured';
+                    ? _('Configured in GNOME Secret Service')
+                    : _('Not configured');
                 return configured;
             } catch {
-                credentialRow.subtitle = 'Secret Service unavailable';
+                if (!cancellable.is_cancelled())
+                    credentialRow.subtitle = _('Secret Service unavailable');
                 return false;
             }
         };
@@ -220,25 +226,25 @@ export default class MprisLyricsPreferences extends ExtensionPreferences {
             try {
                 const configured = await refreshCredentialStatus();
                 const entry = new Adw.PasswordEntryRow({
-                    title: 'API key',
+                    title: _('API key'),
                     text: '',
                 });
                 const dialog = new Adw.AlertDialog({
-                    heading: 'Translation credential',
+                    heading: _('Translation credential'),
                     body: configured
-                        ? 'Enter a new key to replace the saved credential.'
-                        : 'The key will be stored in GNOME Secret Service.',
+                        ? _('Enter a new key to replace the saved credential.')
+                        : _('The key will be stored in GNOME Secret Service.'),
                     extra_child: entry,
                     close_response: 'cancel',
                     default_response: 'save',
                 });
-                dialog.add_response('cancel', 'Cancel');
+                dialog.add_response('cancel', _('Cancel'));
                 if (configured) {
-                    dialog.add_response('remove', 'Remove');
+                    dialog.add_response('remove', _('Remove'));
                     dialog.set_response_appearance(
                         'remove', Adw.ResponseAppearance.DESTRUCTIVE);
                 }
-                dialog.add_response('save', 'Save');
+                dialog.add_response('save', _('Save'));
                 dialog.set_response_appearance(
                     'save', Adw.ResponseAppearance.SUGGESTED);
                 dialog.choose(window, null, async (_dialog, result) => {
@@ -247,59 +253,66 @@ export default class MprisLyricsPreferences extends ExtensionPreferences {
                         const provider = settings.get_string(
                             'translation-provider');
                         if (response === 'save')
-                            await credentialStore.store(provider, entry.text);
+                            await credentialStore.store(
+                                provider, entry.text, cancellable);
                         else if (response === 'remove')
-                            await credentialStore.clear(provider);
+                            await credentialStore.clear(provider, cancellable);
                         else
                             return;
                         bumpGeneration(
                             settings, 'translation-credential-generation');
                         await refreshCredentialStatus();
                     } catch {
-                        credentialRow.subtitle =
-                            'Could not update credential in Secret Service';
+                        if (!cancellable.is_cancelled()) {
+                            credentialRow.subtitle = _(
+                                'Could not update credential in Secret Service');
+                        }
                     } finally {
-                        entry.text = '';
-                        configureCredentialButton.sensitive = true;
+                        if (!cancellable.is_cancelled()) {
+                            entry.text = '';
+                            configureCredentialButton.sensitive = true;
+                        }
                     }
                 });
             } catch {
-                credentialRow.subtitle =
-                    'Could not open credential configuration';
-                configureCredentialButton.sensitive = true;
+                if (!cancellable.is_cancelled()) {
+                    credentialRow.subtitle = _(
+                        'Could not open credential configuration');
+                    configureCredentialButton.sensitive = true;
+                }
             }
         });
 
         const playerGroup = new Adw.PreferencesGroup({
-            title: 'Player',
-            description: 'Choose among currently available players from the extension popup.',
+            title: _('Player'),
+            description: _('Choose among currently available players from the extension popup.'),
         });
         page.add(playerGroup);
         const preferredPlayerRow = new Adw.ActionRow({
-            title: 'Preferred player',
+            title: _('Preferred player'),
             subtitle: settings.get_string('preferred-player') === 'auto'
-                ? 'Auto'
+                ? _('Auto')
                 : settings.get_string('preferred-player'),
         });
         playerGroup.add(preferredPlayerRow);
         signalIds.push(settings.connect('changed::preferred-player', () => {
             const preferred = settings.get_string('preferred-player');
             preferredPlayerRow.subtitle = preferred === 'auto'
-                ? 'Auto'
+                ? _('Auto')
                 : preferred;
         }));
 
         const storageGroup = new Adw.PreferencesGroup({
-            title: 'Storage',
-            description: 'Cached lyrics are stored locally and expire automatically.',
+            title: _('Storage'),
+            description: _('Cached lyrics are stored locally and expire automatically.'),
         });
         page.add(storageGroup);
         const cacheRow = new Adw.ActionRow({
-            title: 'Lyrics cache',
-            subtitle: 'Positive results: 30 days; unavailable lyrics: 24 hours',
+            title: _('Lyrics cache'),
+            subtitle: _('Positive results: 30 days; unavailable lyrics: 24 hours'),
         });
         const clearButton = new Gtk.Button({
-            label: 'Clear Lyrics Cache',
+            label: _('Clear Lyrics Cache'),
             valign: Gtk.Align.CENTER,
         });
         clearButton.add_css_class('destructive-action');
@@ -308,22 +321,28 @@ export default class MprisLyricsPreferences extends ExtensionPreferences {
         clearButton.connect('clicked', async () => {
             clearButton.sensitive = false;
             try {
-                await clearLyricsCache();
+                await clearLyricsCache(undefined, cancellable);
+                if (cancellable.is_cancelled())
+                    return;
                 bumpGeneration(settings, 'cache-clear-generation');
-                cacheRow.subtitle = 'Lyrics cache cleared';
+                cacheRow.subtitle = _('Lyrics cache cleared');
             } catch (error) {
-                cacheRow.subtitle = `Could not clear cache: ${error.message}`;
+                if (!cancellable.is_cancelled()) {
+                    cacheRow.subtitle = _('Could not clear cache: %s')
+                        .format(error.message);
+                }
             } finally {
-                clearButton.sensitive = true;
+                if (!cancellable.is_cancelled())
+                    clearButton.sensitive = true;
             }
         });
 
         const translationCacheRow = new Adw.ActionRow({
-            title: 'Translation cache',
-            subtitle: 'Checking cached translations…',
+            title: _('Translation cache'),
+            subtitle: _('Checking cached translations…'),
         });
         const clearTranslationButton = new Gtk.Button({
-            label: 'Clear Translation Cache',
+            label: _('Clear Translation Cache'),
             valign: Gtk.Align.CENTER,
         });
         clearTranslationButton.add_css_class('destructive-action');
@@ -331,32 +350,42 @@ export default class MprisLyricsPreferences extends ExtensionPreferences {
         storageGroup.add(translationCacheRow);
         const updateTranslationCacheCount = async () => {
             try {
-                const count = await countTranslationCache();
-                translationCacheRow.subtitle =
-                    `${count} cached ${count === 1 ? 'song' : 'songs'}`;
+                const count = await countTranslationCache(undefined, cancellable);
+                if (cancellable.is_cancelled())
+                    return;
+                translationCacheRow.subtitle = ngettext(
+                    '%d cached song', '%d cached songs', count).format(count);
             } catch {
-                translationCacheRow.subtitle = 'Could not inspect cache';
+                if (!cancellable.is_cancelled())
+                    translationCacheRow.subtitle = _('Could not inspect cache');
             }
         };
         updateTranslationCacheCount();
         clearTranslationButton.connect('clicked', async () => {
             clearTranslationButton.sensitive = false;
             try {
-                await clearTranslationCache();
+                await clearTranslationCache(undefined, cancellable);
+                if (cancellable.is_cancelled())
+                    return;
                 bumpGeneration(
                     settings, 'translation-cache-clear-generation');
-                translationCacheRow.subtitle = 'Translation cache cleared';
+                translationCacheRow.subtitle = _('Translation cache cleared');
             } catch {
-                translationCacheRow.subtitle =
-                    'Could not clear translation cache';
+                if (!cancellable.is_cancelled()) {
+                    translationCacheRow.subtitle = _(
+                        'Could not clear translation cache');
+                }
             } finally {
-                clearTranslationButton.sensitive = true;
+                if (!cancellable.is_cancelled())
+                    clearTranslationButton.sensitive = true;
             }
         });
 
         window.connect('close-request', () => {
+            cancellable.cancel();
             for (const id of signalIds)
                 settings.disconnect(id);
+            return false;
         });
     }
 }

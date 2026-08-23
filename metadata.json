@@ -1,8 +1,9 @@
 {
   "uuid": "mpris-lyrics@eureka",
   "name": "MPRIS Lyrics",
-  "description": "Show synchronized and optionally translated MPRIS lyrics in the GNOME panel and popup.",
-  "version": 5,
+  "description": "Show synchronized and optionally translated lyrics for MPRIS-compatible media players in the GNOME panel.",
+  "url": "https://github.com/eurekaevan/mpris-lyrics",
+  "gettext-domain": "mpris-lyrics@eureka",
   "settings-schema": "org.gnome.shell.extensions.mpris-lyrics",
   "shell-version": [
     "50"

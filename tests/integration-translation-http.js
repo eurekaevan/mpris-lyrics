@@ -105,12 +105,20 @@ async function run() {
     let result = await translate(provider);
     assert(result.length === 2 && result[0].text === '[zh-CN] Hello' &&
         observed.authorization === 'Bearer unit-test-token' &&
-        observed.userAgent.startsWith('MPRIS Lyrics/5.0') &&
+        observed.userAgent.startsWith('MPRIS Lyrics/0.9.0') &&
         observed.body.store === false &&
         observed.body.text.format.type === 'json_schema' &&
         observed.body.text.format.strict === true &&
         !JSON.stringify(observed.body).includes('unit-test-token'),
     'the OpenAI provider should use authenticated strict structured output without putting the credential in JSON');
+    provider.destroy();
+
+    provider = new OpenAITranslationProvider({
+        endpoint,
+        maxResponseBytes: 64,
+    });
+    await expectCode(() => translate(provider), 'invalid_response',
+        'an oversized translation response should be rejected');
     provider.destroy();
 
     mode = 'malformed';

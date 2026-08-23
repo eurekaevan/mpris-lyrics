@@ -97,46 +97,41 @@ export class MprisManager {
         this._selectedName = null;
         this._dbusSignalId = 0;
         this._cancellable = null;
-        this._running = false;
         this._activitySerial = 0;
         this._preferredPlayer = 'auto';
         this._playerListSignature = '';
     }
 
     start() {
-        if (this._running)
+        if (this._cancellable)
             return;
 
-        this._running = true;
-        this._cancellable = new Gio.Cancellable();
+        const cancellable = new Gio.Cancellable();
+        this._cancellable = cancellable;
         Gio.bus_get(
             Gio.BusType.SESSION,
-            this._cancellable,
+            cancellable,
             (_source, result) => {
                 let connection;
                 try {
                     connection = Gio.bus_get_finish(result);
                 } catch (error) {
-                    if (this._running &&
+                    if (this._cancellable === cancellable &&
                         !error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                         console.warn(`MPRIS Lyrics: could not open session bus: ${error.message}`);
                     return;
                 }
 
-                if (!this._running)
+                if (this._cancellable !== cancellable)
                     return;
 
                 this._connection = connection;
-                this._watchPlayers();
+                this._watchPlayers(cancellable);
             });
     }
 
     destroy() {
-        if (!this._running)
-            return;
-
-        this._running = false;
-        this._cancellable?.cancel();
+        this._cancellable.cancel();
 
         if (this._connection && this._dbusSignalId) {
             this._connection.signal_unsubscribe(this._dbusSignalId);
@@ -177,7 +172,7 @@ export class MprisManager {
         return player ? this._positionAt(player) : 0;
     }
 
-    _watchPlayers() {
+    _watchPlayers(cancellable) {
         this._dbusSignalId = this._connection.signal_subscribe(
             DBUS_NAME,
             DBUS_INTERFACE,
@@ -205,19 +200,19 @@ export class MprisManager {
             new GLib.VariantType('(as)'),
             Gio.DBusCallFlags.NONE,
             CALL_TIMEOUT_MS,
-            this._cancellable,
+            cancellable,
             (connection, result) => {
                 let names;
                 try {
                     [names] = connection.call_finish(result).deepUnpack();
                 } catch (error) {
-                    if (this._running &&
+                    if (this._cancellable === cancellable &&
                         !error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                         console.warn(`MPRIS Lyrics: player discovery failed: ${error.message}`);
                     return;
                 }
 
-                if (!this._running)
+                if (this._cancellable !== cancellable)
                     return;
 
                 for (const name of names) {
@@ -228,7 +223,7 @@ export class MprisManager {
     }
 
     _addPlayer(name) {
-        if (!this._running || this._players.has(name))
+        if (!this._cancellable || this._players.has(name))
             return;
 
         const now = GLib.get_monotonic_time();
@@ -319,7 +314,7 @@ export class MprisManager {
                 try {
                     [properties] = connection.call_finish(result).deepUnpack();
                 } catch (error) {
-                    if (this._running &&
+                    if (this._cancellable &&
                         this._players.get(player.name) === player &&
                         player.stateVersion === stateVersion &&
                         !error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
@@ -327,7 +322,8 @@ export class MprisManager {
                     return;
                 }
 
-                if (!this._running || this._players.get(player.name) !== player ||
+                if (!this._cancellable ||
+                    this._players.get(player.name) !== player ||
                     player.stateVersion !== stateVersion)
                     return;
 
@@ -351,18 +347,20 @@ export class MprisManager {
                 try {
                     [properties] = connection.call_finish(result).deepUnpack();
                 } catch (error) {
-                    if (this._running &&
+                    if (this._cancellable &&
                         this._players.get(player.name) === player &&
                         !error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                         console.debug(`MPRIS Lyrics: player identity unavailable for ${player.name}: ${error.message}`);
-                    if (this._running && this._players.get(player.name) === player) {
+                    if (this._cancellable &&
+                        this._players.get(player.name) === player) {
                         player.identityReady = true;
                         this._notifyStateChanged();
                     }
                     return;
                 }
 
-                if (!this._running || this._players.get(player.name) !== player)
+                if (!this._cancellable ||
+                    this._players.get(player.name) !== player)
                     return;
 
                 player.identity = unpackString(properties.Identity);
@@ -488,7 +486,7 @@ export class MprisManager {
                 try {
                     [position] = connection.call_finish(result).deepUnpack();
                 } catch (error) {
-                    if (this._running &&
+                    if (this._cancellable &&
                         this._players.get(player.name) === player &&
                         player.positionRequestSerial === requestSerial &&
                         !error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
@@ -496,7 +494,8 @@ export class MprisManager {
                     return;
                 }
 
-                if (!this._running || this._players.get(player.name) !== player ||
+                if (!this._cancellable ||
+                    this._players.get(player.name) !== player ||
                     player.positionRequestSerial !== requestSerial)
                     return;
 
@@ -589,7 +588,7 @@ export class MprisManager {
     }
 
     _notifyStateChanged() {
-        if (!this._running || !this._onStateChanged)
+        if (!this._cancellable || !this._onStateChanged)
             return;
 
         const selected = this._choosePlayer();

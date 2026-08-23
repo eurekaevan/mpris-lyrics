@@ -12,9 +12,62 @@ export {normalizeLyricsPayload} from './lyrics-normalizer.js';
 
 const API_URL = 'https://lrclib.net/api/get';
 const SEARCH_API_URL = 'https://lrclib.net/api/search';
-const USER_AGENT = 'MPRIS Lyrics/5.0 (mpris-lyrics@eureka)';
+const USER_AGENT = 'MPRIS Lyrics/0.9.0 (mpris-lyrics@eureka)';
 const REQUEST_SPACING_MS = 300;
 const MAX_CACHE_ENTRIES = 100;
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const READ_CHUNK_BYTES = 64 * 1024;
+
+Gio._promisify(Gio.InputStream.prototype,
+    'read_bytes_async', 'read_bytes_finish');
+Gio._promisify(Gio.InputStream.prototype,
+    'close_async', 'close_finish');
+Gio._promisify(Soup.Session.prototype,
+    'send_async', 'send_finish');
+
+class ResponseTooLargeError extends Error {}
+
+async function readResponse(session, message, limit, cancellable) {
+    const stream = await session.send_async(
+        message, GLib.PRIORITY_DEFAULT, cancellable);
+    try {
+        if (message.status_code !== 200)
+            return GLib.Bytes.new(new Uint8Array());
+
+        const contentLength = message.get_response_headers()
+            .get_content_length();
+        if (contentLength > limit)
+            throw new ResponseTooLargeError();
+
+        const chunks = [];
+        let total = 0;
+        while (true) {
+            const bytes = await stream.read_bytes_async(
+                READ_CHUNK_BYTES, GLib.PRIORITY_DEFAULT, cancellable);
+            const size = bytes.get_size();
+            if (size === 0)
+                break;
+            total += size;
+            if (total > limit)
+                throw new ResponseTooLargeError();
+            chunks.push(bytes.get_data());
+        }
+
+        const contents = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+            contents.set(chunk, offset);
+            offset += chunk.length;
+        }
+        return GLib.Bytes.new(contents);
+    } finally {
+        try {
+            await stream.close_async(GLib.PRIORITY_DEFAULT, null);
+        } catch {
+            // The request error is more useful than a stream-close error.
+        }
+    }
+}
 
 function requestParameters(track) {
     const parameters = [
@@ -72,6 +125,7 @@ export class LyricsProvider {
         requestSpacingMs = REQUEST_SPACING_MS,
         timeoutSeconds = 15,
         maxCacheEntries = MAX_CACHE_ENTRIES,
+        maxResponseBytes = MAX_RESPONSE_BYTES,
         persistentCache = true,
         cacheRoot = undefined,
         diskCacheOptions = {},
@@ -84,6 +138,7 @@ export class LyricsProvider {
         this._apiUrl = apiUrl;
         this._searchUrl = searchUrl ?? defaultSearchUrl(apiUrl);
         this._requestSpacingMs = requestSpacingMs;
+        this._maxResponseBytes = Math.max(1, Math.floor(maxResponseBytes));
         const cacheLimit = Math.floor(maxCacheEntries);
         this._maxCacheEntries = Number.isFinite(cacheLimit)
             ? Math.max(1, cacheLimit)
@@ -101,14 +156,9 @@ export class LyricsProvider {
         this._lastRequestUs = 0;
         this._pendingKey = null;
         this._pendingCallbacks = [];
-        this._destroyed = false;
     }
 
     fetch(track, callback) {
-        if (this._destroyed) {
-            callback(null);
-            return;
-        }
         if (!track.title || !track.artist) {
             this.cancelPending();
             callback(null);
@@ -173,14 +223,11 @@ export class LyricsProvider {
     }
 
     destroy() {
-        if (this._destroyed)
-            return;
-
-        this._destroyed = true;
         this.cancelPending();
         this._session.abort();
         this._session = null;
         this._cache.clear();
+        this._diskCache?.destroy();
         this._diskCache = null;
     }
 
@@ -209,7 +256,7 @@ export class LyricsProvider {
                 this._cancellable = null;
         }
 
-        if (serial !== this._requestSerial || this._destroyed)
+        if (serial !== this._requestSerial)
             return;
 
         if (result.hit && result.payload === null) {
@@ -231,7 +278,7 @@ export class LyricsProvider {
     }
 
     _scheduleStage(track, key, serial, stage, delayMs, attempt) {
-        if (serial !== this._requestSerial || this._destroyed)
+        if (serial !== this._requestSerial)
             return;
 
         if (delayMs <= 0) {
@@ -244,7 +291,7 @@ export class LyricsProvider {
             Math.max(1, Math.ceil(delayMs)),
             () => {
                 this._delayTimerId = 0;
-                if (serial === this._requestSerial && !this._destroyed)
+                if (serial === this._requestSerial)
                     this._sendRequest(track, key, serial, stage, attempt);
                 return GLib.SOURCE_REMOVE;
             });
@@ -253,7 +300,7 @@ export class LyricsProvider {
     }
 
     _sendRequest(track, key, serial, stage, attempt) {
-        if (serial !== this._requestSerial || this._destroyed)
+        if (serial !== this._requestSerial)
             return;
 
         let message;
@@ -274,27 +321,12 @@ export class LyricsProvider {
         this._cancellable = cancellable;
         this._lastRequestUs = GLib.get_monotonic_time();
 
-        this._session.send_and_read_async(
-            message,
-            GLib.PRIORITY_DEFAULT,
-            cancellable,
-            (session, result) => {
+        readResponse(this._session, message,
+            this._maxResponseBytes, cancellable).then(bytes => {
                 if (this._cancellable === cancellable)
                     this._cancellable = null;
 
-                let bytes;
-                try {
-                    bytes = session.send_and_read_finish(result);
-                } catch (error) {
-                    if (serial === this._requestSerial && !this._destroyed &&
-                        !error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) {
-                        console.warn(`MPRIS Lyrics: LRCLIB request failed: ${error.message}`);
-                        this._complete(serial, null);
-                    }
-                    return;
-                }
-
-                if (serial !== this._requestSerial || this._destroyed)
+                if (serial !== this._requestSerial)
                     return;
 
                 // Soup.Status in the Fedora typelib predates HTTP 429. Reading
@@ -363,6 +395,18 @@ export class LyricsProvider {
                 this._remember(key, document);
                 this._persist(track, json);
                 this._complete(serial, document);
+            }).catch(error => {
+                if (this._cancellable === cancellable)
+                    this._cancellable = null;
+                if (serial !== this._requestSerial ||
+                    error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                    return;
+                if (error instanceof ResponseTooLargeError) {
+                    console.warn('MPRIS Lyrics: LRCLIB response exceeded the size limit');
+                } else {
+                    console.warn(`MPRIS Lyrics: LRCLIB request failed: ${error.message}`);
+                }
+                this._complete(serial, null);
             });
     }
 
@@ -373,7 +417,7 @@ export class LyricsProvider {
     }
 
     _complete(serial, value) {
-        if (serial !== this._requestSerial || this._destroyed)
+        if (serial !== this._requestSerial)
             return;
 
         const callbacks = this._pendingCallbacks;
@@ -401,7 +445,8 @@ export class LyricsProvider {
 
     _persist(track, payload) {
         this._diskCache?.put(track, payload).catch(error => {
-            console.warn(`MPRIS Lyrics: could not write lyrics cache: ${error.message}`);
+            if (!error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                console.warn(`MPRIS Lyrics: could not write lyrics cache: ${error.message}`);
         });
     }
 }

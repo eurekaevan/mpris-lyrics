@@ -10,6 +10,10 @@ import {ArtworkView} from '../artwork-view.js';
 import {sourceLyricsHash} from '../translation-document.js';
 
 const UUID = 'mpris-lyrics@eureka';
+const EFFECTIVE_LOCALE = GLib.getenv('LC_ALL') ??
+    GLib.getenv('LANGUAGE') ?? GLib.getenv('LANG') ?? '';
+const SIMPLIFIED_CHINESE = EFFECTIVE_LOCALE.startsWith('zh_CN');
+const uiText = (english, chinese) => SIMPLIFIED_CHINESE ? chinese : english;
 
 function assert(condition, message) {
     if (!condition)
@@ -66,6 +70,11 @@ export async function run() {
 
     const extension = Main.extensionManager.lookup(UUID);
     assert(extension, 'the extension was not discovered');
+    assert(extension.metadata.url ===
+        'https://github.com/eurekaevan/mpris-lyrics' &&
+        extension.metadata['gettext-domain'] === UUID &&
+        !Object.hasOwn(extension.metadata, 'version'),
+    'the packaged metadata should expose URL/gettext and omit deprecated version');
 
     const indicator = Main.panel.statusArea[UUID];
     assert(indicator, 'the extension did not create its panel indicator');
@@ -127,7 +136,8 @@ export async function run() {
         artUrl: localArtwork.get_uri(),
         durationUs: 220_000_000,
     }, 'shell-track-a');
-    assert(view._messageLabel.text === 'Loading lyrics…',
+    assert(view._messageLabel.text ===
+        uiText('Loading lyrics…', '正在加载歌词…'),
         'a track change should show the restrained loading state');
     const lines = Array.from({length: 30}, (_unused, index) => ({
         lineId: `line-${index}`,
@@ -145,7 +155,7 @@ export async function run() {
         lines,
     };
     view.setLyrics(lineDocument);
-    const originalRows = [...view._lyricRows];
+    let originalRows = [...view._lyricRows];
     view.setCurrentLyricIndex(20);
     view.setText('Synchronized lyric line 21 with wrapping text');
     view.setProgress(119_000_000, 220_000_000);
@@ -415,7 +425,8 @@ export async function run() {
     assert(view._lyricRows.every((row, index) => row === originalRows[index]),
         'translation arrival must not rebuild lyric rows');
     view.setTranslationState('network_error');
-    assert(view._translationStatusLabel.text === 'Translation network error',
+    assert(view._translationStatusLabel.text ===
+        uiText('Translation network error', '翻译网络错误'),
         'translation failure should remain a compact secondary state');
     view.setTranslationState('available');
     view.setTranslationDisplayMode('translated');
@@ -503,10 +514,12 @@ export async function run() {
         selected: true,
     }], 'auto');
     assert(view._playerMenu.label.clutter_text.get_text() ===
-        'Player   Mozilla Firefox',
+        uiText('Player   Mozilla Firefox', '播放器   Mozilla Firefox'),
     'the native player submenu row should separate its secondary label and value');
 
     const screenshotPath = GLib.getenv('MPRIS_LYRICS_SCREENSHOT_PATH');
+    const screenshotKind = GLib.getenv('MPRIS_LYRICS_SCREENSHOT_KIND') ??
+        'bilingual';
     const screenshotPanelText = GLib.getenv(
         'MPRIS_LYRICS_SCREENSHOT_PANEL_TEXT');
     const screenshotPanelPosition = GLib.getenv(
@@ -517,8 +530,64 @@ export async function run() {
         view.setText(screenshotPanelText);
         await Scripting.sleep(180);
     }
+    if (screenshotKind === 'panel') {
+        indicator.menu.close();
+        await Scripting.sleep(250);
+    } else if (screenshotKind === 'popup') {
+        view.setTranslationDisplayMode('original');
+    } else if (screenshotKind === 'word') {
+        view.setLyrics({
+            source: 'test',
+            sourceId: null,
+            instrumental: false,
+            metadata: {},
+            syncLevel: 'word',
+            lines: [{
+                lineId: 'screenshot-word-line',
+                text: 'Safe multilingual word sync · שלום 世界',
+                startMs: 0,
+                endMs: 3000,
+                words: [
+                    {text: 'Safe ', startMs: 0, endMs: 800},
+                    {text: 'multilingual ', startMs: 800, endMs: 1600},
+                    {text: 'word sync · שלום ', startMs: 1600, endMs: 2400},
+                    {text: '世界', startMs: 2400, endMs: 3000},
+                ],
+            }],
+        });
+        view.setTranslation({lines: [{
+            lineId: 'screenshot-word-line',
+            text: '安全的多语言逐字同步',
+        }]});
+        view.setCurrentLyricIndex(0, {reposition: true});
+        view.setCurrentWordStates(0,
+            ['past', 'past', 'current', 'future']);
+        view._scrollView.vadjustment.value = 0;
+        await Scripting.sleep(250);
+    }
     if (screenshotPath)
         await takeScreenshot(screenshotPath);
+    if (screenshotKind === 'panel') {
+        indicator.menu.open();
+        await Scripting.sleep(250);
+    } else if (screenshotKind === 'popup') {
+        view.setTranslationDisplayMode('bilingual');
+        view.setCurrentLyricIndex(20, {reposition: true});
+        await Scripting.sleep(250);
+    } else if (screenshotKind === 'word') {
+        view.setLyrics(lineDocument);
+        view.setTranslation({
+            lines: lines.map((line, index) => ({
+                lineId: line.lineId,
+                text: index === 20
+                    ? '第 21 行安全译文 · مرحبا'
+                    : `第 ${index + 1} 行译文`,
+            })),
+        });
+        view.setCurrentLyricIndex(20, {reposition: true});
+        await Scripting.sleep(250);
+        originalRows = [...view._lyricRows];
+    }
     if (screenshotPanelText)
         view.setText('Synchronized lyric line 21 with wrapping text');
     if (screenshotPanelPosition)
@@ -586,7 +655,7 @@ export async function run() {
         lineId: 'word-line-0',
         text: '逐词同步的行级译文',
     }]});
-    view.setCurrentLyricIndex(0);
+    view.setCurrentLyricIndex(0, {reposition: true});
     view.setCurrentWordStates(0, ['past', 'current', 'future', 'future']);
     assert(view._lyricLabels[0].clutter_text.get_text() === markupText,
         'word highlighting must escape lyric text instead of injecting markup');
@@ -826,7 +895,8 @@ export async function run() {
         'the paused position should select the first lyric');
     view._increaseButton.emit('clicked', 1);
     assert(instance._trackOffsetMs === 500 &&
-        view._offsetLabel.text === '+0.5 s' && view._resetButton.visible,
+        view._offsetLabel.text === uiText('+0.5 s', '+0.5 秒') &&
+        view._resetButton.visible,
         'popup buttons should adjust the current track offset');
     assert(instance._currentLyricIndex === 1 &&
         view._label.text === 'Second',
@@ -858,7 +928,8 @@ export async function run() {
     settings.set_int('global-offset-ms', 500);
     assert(instance._globalOffsetMs === 500 &&
         instance._currentLyricIndex === 1 &&
-        view._effectiveOffsetLabel.text.includes('Effective +0.5 s'),
+        view._effectiveOffsetLabel.text.includes(
+            uiText('Effective +0.5 s', '实际 +0.5 秒')),
     'a GSettings global offset change should immediately resynchronize');
     settings.set_int('global-offset-ms', 0);
 
@@ -950,7 +1021,8 @@ export async function run() {
 
     view.setPlayers(availablePlayers, 'auto');
     assert(view._playerMenu.menu.numMenuItems === 3 &&
-        view._playerMenu.label.clutter_text.get_text() === 'Player   Firefox',
+        view._playerMenu.label.clutter_text.get_text() ===
+            uiText('Player   Firefox', '播放器   Firefox'),
     'the popup should list Auto and only currently available stable players');
     view._playerMenu.menu._getMenuItems()[1].activate(null);
     assert(settings.get_string('preferred-player') === 'desktop:firefox' &&
@@ -1008,7 +1080,7 @@ export async function run() {
         syncLevel: 'none',
         lines: [],
     });
-    assert(view._messageLabel.text === 'Instrumental',
+    assert(view._messageLabel.text === uiText('Instrumental', '纯音乐'),
         'instrumental should use one restrained centered line');
 
     view.setTrack({
@@ -1020,7 +1092,7 @@ export async function run() {
     }, 'no-artwork-track');
     view.setLyrics(null);
     assert(view._lyricRows.length === 0 &&
-        view._messageLabel.text === 'No synchronized lyrics',
+        view._messageLabel.text === uiText('No lyrics found', '未找到歌词'),
         'the popup should show the no-lyrics result');
     assert(!view._albumLabel.visible && view._albumLabel.text === '',
         'an absent album should stay hidden without artificial fallback text');
@@ -1058,13 +1130,20 @@ export async function run() {
         instance._translationService === null,
     'disable() should disconnect settings and destroy timers/translation service');
 
-    assert(Main.extensionManager.enableExtension(UUID),
-        'the extension could not be re-enabled after cleanup');
-    await Scripting.sleep(500);
-    assert(Main.panel.statusArea[UUID],
-        're-enable should recreate the panel indicator');
-    assert(Main.extensionManager.disableExtension(UUID),
-        'the re-enabled extension could not be disabled cleanly');
+    for (let cycle = 1; cycle <= 3; cycle++) {
+        assert(Main.extensionManager.enableExtension(UUID),
+            `enable cycle ${cycle} failed after cleanup`);
+        await Scripting.sleep(300);
+        const cycleIndicator = Main.panel.statusArea[UUID];
+        assert(cycleIndicator &&
+            Main.panel.statusArea[UUID] === cycleIndicator,
+        `enable cycle ${cycle} should create exactly one registered indicator`);
+        assert(Main.extensionManager.disableExtension(UUID),
+            `disable cycle ${cycle} failed`);
+        await Scripting.sleep(200);
+        assert(!Main.panel.statusArea[UUID],
+            `disable cycle ${cycle} left a stale indicator`);
+    }
 }
 
 export function finish() {

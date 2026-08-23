@@ -47,7 +47,7 @@ const manager = new MprisManager(state => {
             document, manager.getPositionUs() / 1000);
         print(`syncLevel=${document?.syncLevel ?? 'missing'}`);
         print(`lyricsLines=${document?.lines?.length ?? 0}`);
-        print(`currentLine=${document?.lines?.[index]?.text ?? ''}`);
+        print(`currentLineAvailable=${index >= 0}`);
         lyricsFinished = true;
         maybeFinish();
     });

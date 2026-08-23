@@ -161,10 +161,11 @@ export async function removeTree(file, cancellable = null) {
     throw new Error(`cache directory remained busy: ${file.get_path()}`);
 }
 
-export async function clearLyricsCache(cacheRoot = defaultCacheRoot()) {
+export async function clearLyricsCache(
+    cacheRoot = defaultCacheRoot(), cancellable = null) {
     const lyricsDirectory = Gio.File.new_for_path(
         GLib.build_filenamev([cacheRoot, 'lyrics']));
-    await removeTree(lyricsDirectory);
+    await removeTree(lyricsDirectory, cancellable);
 }
 
 export class LyricsDiskCache {
@@ -182,6 +183,7 @@ export class LyricsDiskCache {
         this._maxEntries = Math.max(1, Math.floor(maxEntries));
         this._now = now;
         this._pendingWrites = new Set();
+        this._cancellable = new Gio.Cancellable();
     }
 
     async get(track, cancellable = null) {
@@ -205,22 +207,25 @@ export class LyricsDiskCache {
             ? this._negativeTtlMs
             : this._positiveTtlMs;
         if (this._now() - record.fetchedAt > ttl) {
-            file.delete_async(GLib.PRIORITY_DEFAULT, null).catch(() => {});
+            file.delete_async(
+                GLib.PRIORITY_DEFAULT, this._cancellable).catch(() => {});
             return {hit: false};
         }
 
         record.lastAccessed = this._now();
-        this._trackWrite(writeJson(file, record)).catch(error => {
+        this._trackWrite(writeJson(
+            file, record, this._cancellable)).catch(error => {
             console.debug(`MPRIS Lyrics: could not refresh lyrics cache entry: ${error.message}`);
         });
         return {hit: true, payload: decoded.payload, record};
     }
 
     put(track, payload = null) {
-        return this._trackWrite(this._put(track, payload));
+        return this._trackWrite(this._put(
+            track, payload, this._cancellable));
     }
 
-    async _put(track, payload) {
+    async _put(track, payload, cancellable) {
         const hash = trackHash(track);
         const now = this._now();
         const raw = this._sanitizePayload(payload);
@@ -244,13 +249,18 @@ export class LyricsDiskCache {
             lastAccessed: now,
         };
         const file = this._directory.get_child(`${hash}.json`);
-        await writeJson(file, record);
-        await this._evictOldest();
+        await writeJson(file, record, cancellable);
+        await this._evictOldest(cancellable);
     }
 
     async clear() {
         await Promise.allSettled([...this._pendingWrites]);
-        await removeTree(this._directory);
+        await removeTree(this._directory, this._cancellable);
+    }
+
+    destroy() {
+        this._cancellable.cancel();
+        this._cancellable = null;
     }
 
     _trackWrite(promise) {
@@ -336,8 +346,8 @@ export class LyricsDiskCache {
         };
     }
 
-    async _evictOldest() {
-        const children = (await listChildren(this._directory))
+    async _evictOldest(cancellable) {
+        const children = (await listChildren(this._directory, cancellable))
             .filter(info => info.get_file_type() === Gio.FileType.REGULAR &&
                 info.get_name().endsWith('.json'));
         if (children.length <= this._maxEntries)
@@ -348,7 +358,7 @@ export class LyricsDiskCache {
             let lastAccessed = 0;
             try {
                 const record = await readJson(
-                    this._directory.get_child(info.get_name()));
+                    this._directory.get_child(info.get_name()), cancellable);
                 lastAccessed = Number(record.lastAccessed) ||
                     Number(record.fetchedAt) || 0;
             } catch {
@@ -360,7 +370,7 @@ export class LyricsDiskCache {
         for (const {info} of ages.slice(0, ages.length - this._maxEntries)) {
             try {
                 await this._directory.get_child(info.get_name())
-                    .delete_async(GLib.PRIORITY_DEFAULT, null);
+                    .delete_async(GLib.PRIORITY_DEFAULT, cancellable);
             } catch (error) {
                 if (!isNotFound(error))
                     throw error;
@@ -384,8 +394,8 @@ export class OffsetStore {
         this._entries = new Map();
         this._dirty = false;
         this._saving = false;
-        this._destroyed = false;
         this._savePromise = null;
+        this._cancellable = new Gio.Cancellable();
         this._loadedPromise = this._load();
     }
 
@@ -417,10 +427,10 @@ export class OffsetStore {
     }
 
     destroy() {
-        this._destroyed = true;
+        this._cancellable.cancel();
+        this._cancellable = null;
         this._onLoaded = null;
-        // An in-flight atomic save is intentionally allowed to finish so a
-        // final popup adjustment is not lost during extension disable.
+        this._entries.clear();
     }
 
     async ready() {
@@ -435,13 +445,18 @@ export class OffsetStore {
     }
 
     async _load() {
+        const cancellable = this._cancellable;
         let data = null;
         try {
-            data = await readJson(this._file);
+            data = await readJson(this._file, cancellable);
         } catch (error) {
-            if (!isNotFound(error))
+            if (!isNotFound(error) &&
+                !error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 console.debug(`MPRIS Lyrics: ignoring offset store: ${error.message}`);
         }
+
+        if (cancellable.is_cancelled())
+            return;
 
         if (data?.version === OFFSET_STORE_VERSION && data.entries &&
             typeof data.entries === 'object') {
@@ -484,18 +499,22 @@ export class OffsetStore {
     }
 
     async _saveLoop() {
+        const cancellable = this._cancellable;
         this._saving = true;
         await this._loadedPromise;
-        while (this._dirty) {
+        while (this._dirty && !cancellable.is_cancelled()) {
             this._dirty = false;
             const entries = Object.fromEntries(this._entries);
             try {
                 await writeJson(this._file, {
                     version: OFFSET_STORE_VERSION,
                     entries,
-                });
+                }, cancellable);
             } catch (error) {
-                console.warn(`MPRIS Lyrics: could not save track offsets: ${error.message}`);
+                if (!error.matches?.(
+                    Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) {
+                    console.warn(`MPRIS Lyrics: could not save track offsets: ${error.message}`);
+                }
             }
         }
         this._saving = false;

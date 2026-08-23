@@ -29,12 +29,13 @@ function isNotFound(error) {
     return error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_FOUND);
 }
 
-async function ensureDirectory(directory) {
+async function ensureDirectory(directory, cancellable = null) {
     const parent = directory.get_parent();
     if (parent)
-        await ensureDirectory(parent);
+        await ensureDirectory(parent, cancellable);
     try {
-        await directory.make_directory_async(GLib.PRIORITY_DEFAULT, null);
+        await directory.make_directory_async(
+            GLib.PRIORITY_DEFAULT, cancellable);
     } catch (error) {
         if (!error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.EXISTS))
             throw error;
@@ -46,25 +47,25 @@ async function readJson(file, cancellable = null) {
     return JSON.parse(new TextDecoder().decode(contents));
 }
 
-async function writeJson(file, value) {
-    await ensureDirectory(file.get_parent());
+async function writeJson(file, value, cancellable = null) {
+    await ensureDirectory(file.get_parent(), cancellable);
     const contents = new TextEncoder().encode(JSON.stringify(value));
     await file.replace_contents_async(
         contents,
         null,
         false,
         Gio.FileCreateFlags.REPLACE_DESTINATION,
-        null);
+        cancellable);
 }
 
-async function listFiles(directory) {
+async function listFiles(directory, cancellable = null) {
     let enumerator;
     try {
         enumerator = await directory.enumerate_children_async(
             'standard::name,standard::type',
             Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
             GLib.PRIORITY_DEFAULT,
-            null);
+            cancellable);
     } catch (error) {
         if (isNotFound(error))
             return [];
@@ -75,7 +76,7 @@ async function listFiles(directory) {
     try {
         while (true) {
             const batch = await enumerator.next_files_async(
-                64, GLib.PRIORITY_DEFAULT, null);
+                64, GLib.PRIORITY_DEFAULT, cancellable);
             if (batch.length === 0)
                 break;
             files.push(...batch.filter(info =>
@@ -93,14 +94,16 @@ export function defaultTranslationCacheDirectory(
     return GLib.build_filenamev([cacheRoot, 'translations']);
 }
 
-export async function clearTranslationCache(cacheRoot = defaultCacheRoot()) {
+export async function clearTranslationCache(
+    cacheRoot = defaultCacheRoot(), cancellable = null) {
     await removeTree(Gio.File.new_for_path(
-        defaultTranslationCacheDirectory(cacheRoot)));
+        defaultTranslationCacheDirectory(cacheRoot)), cancellable);
 }
 
-export async function countTranslationCache(cacheRoot = defaultCacheRoot()) {
+export async function countTranslationCache(
+    cacheRoot = defaultCacheRoot(), cancellable = null) {
     return (await listFiles(Gio.File.new_for_path(
-        defaultTranslationCacheDirectory(cacheRoot)))).length;
+        defaultTranslationCacheDirectory(cacheRoot)), cancellable)).length;
 }
 
 export class TranslationDiskCache {
@@ -135,7 +138,7 @@ export class TranslationDiskCache {
                 trackKey,
             });
             record.lastAccessed = this._now();
-            writeJson(file, record).catch(() => {});
+            writeJson(file, record, cancellable).catch(() => {});
             return {hit: true, document};
         } catch (error) {
             if (!isNotFound(error) &&
@@ -145,26 +148,26 @@ export class TranslationDiskCache {
         }
     }
 
-    async put(document) {
+    async put(document, cancellable = null) {
         const file = this._fileFor(document);
         await writeJson(file, {
             ...document,
             lines: document.lines.map(line => ({...line})),
             lastAccessed: this._now(),
-        });
-        await this._evictOldest();
+        }, cancellable);
+        await this._evictOldest(cancellable);
     }
 
-    async clear() {
-        await removeTree(this._directory);
+    async clear(cancellable = null) {
+        await removeTree(this._directory, cancellable);
     }
 
-    async count() {
-        return (await listFiles(this._directory)).length;
+    async count(cancellable = null) {
+        return (await listFiles(this._directory, cancellable)).length;
     }
 
-    async _evictOldest() {
-        const files = await listFiles(this._directory);
+    async _evictOldest(cancellable = null) {
+        const files = await listFiles(this._directory, cancellable);
         if (files.length <= this._maxEntries)
             return;
 
@@ -173,7 +176,7 @@ export class TranslationDiskCache {
             let lastAccessed = 0;
             try {
                 const record = await readJson(
-                    this._directory.get_child(info.get_name()));
+                    this._directory.get_child(info.get_name()), cancellable);
                 lastAccessed = Number(record.lastAccessed) ||
                     Date.parse(record.createdAt) || 0;
             } catch {
@@ -185,7 +188,7 @@ export class TranslationDiskCache {
         for (const entry of ages.slice(0, ages.length - this._maxEntries)) {
             try {
                 await this._directory.get_child(entry.name)
-                    .delete_async(GLib.PRIORITY_DEFAULT, null);
+                    .delete_async(GLib.PRIORITY_DEFAULT, cancellable);
             } catch (error) {
                 if (!isNotFound(error))
                     throw error;

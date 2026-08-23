@@ -1,0 +1,425 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the MPRIS Lyrics package.
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+#, fuzzy
+msgid ""
+msgstr ""
+"Project-Id-Version: MPRIS Lyrics 0.9.0\n"
+"Report-Msgid-Bugs-To: https://github.com/eurekaevan/mpris-lyrics/issues\n"
+"POT-Creation-Date: 2026-08-23 19:58+0800\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
+"Language-Team: LANGUAGE <LL@li.org>\n"
+"Language: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=INTEGER; plural=EXPRESSION;\n"
+
+#: extension.js:589 indicator.js:664
+msgid "Instrumental"
+msgstr ""
+
+#: indicator.js:455 indicator.js:735
+msgid "Translation available on request"
+msgstr ""
+
+#: indicator.js:461 indicator.js:735
+msgid "Translate"
+msgstr ""
+
+#: indicator.js:485
+msgid "Lyrics timing"
+msgstr ""
+
+#: indicator.js:492
+msgid "Reset"
+msgstr ""
+
+#: indicator.js:494
+msgid "Reset lyrics offset"
+msgstr ""
+
+#: indicator.js:507
+msgid "Decrease lyrics offset by 0.5 seconds"
+msgstr ""
+
+#: indicator.js:519
+msgid "Increase lyrics offset by 0.5 seconds"
+msgstr ""
+
+#: indicator.js:527
+msgid "Global +0.0 s  ·  Effective +0.0 s"
+msgstr ""
+
+#: indicator.js:536 indicator.js:894 indicator.js:906 prefs.js:289
+msgid "Player"
+msgstr ""
+
+#: indicator.js:568 indicator.js:668
+msgid "No lyrics found"
+msgstr ""
+
+#: indicator.js:617
+msgid "Loading lyrics…"
+msgstr ""
+
+#: indicator.js:736
+msgid "Loading translation…"
+msgstr ""
+
+#: indicator.js:736
+msgid "Loading…"
+msgstr ""
+
+#: indicator.js:739
+msgid "Translation loaded from cache"
+msgstr ""
+
+#: indicator.js:740
+msgid "Translation available"
+msgstr ""
+
+#: indicator.js:741
+msgid "Refresh"
+msgstr ""
+
+#: indicator.js:744
+msgid "Translation API key is not configured"
+msgstr ""
+
+#: indicator.js:745
+msgid "Translation provider unavailable"
+msgstr ""
+
+#: indicator.js:745 indicator.js:746 indicator.js:747 indicator.js:748
+#: indicator.js:749 indicator.js:750 indicator.js:751
+msgid "Retry"
+msgstr ""
+
+#: indicator.js:746
+msgid "Translation network error"
+msgstr ""
+
+#: indicator.js:747
+msgid "Translation provider error"
+msgstr ""
+
+#: indicator.js:748
+msgid "Translation API key was rejected"
+msgstr ""
+
+#: indicator.js:749
+msgid "Translation rate limited"
+msgstr ""
+
+#: indicator.js:750
+msgid "Translation response was invalid"
+msgstr ""
+
+#: indicator.js:751
+msgid "Translation canceled"
+msgstr ""
+
+#: indicator.js:752
+msgid "Original language matches target language"
+msgstr ""
+
+#: indicator.js:759
+#, javascript-format
+msgid "Lyrics translation action: %s"
+msgstr ""
+
+#: indicator.js:760
+msgid "Lyrics translation"
+msgstr ""
+
+#: indicator.js:844
+#, javascript-format
+msgid "%s s"
+msgstr ""
+
+#: indicator.js:847
+#, javascript-format
+msgid "Global %s  ·  Effective %s"
+msgstr ""
+
+#: indicator.js:872 prefs.js:296 prefs.js:303
+msgid "Auto"
+msgstr ""
+
+#: indicator.js:901
+#, javascript-format
+msgid "Player: %s"
+msgstr ""
+
+#: prefs.js:55
+msgid "General"
+msgstr ""
+
+#: prefs.js:60
+msgid "Panel"
+msgstr ""
+
+#: prefs.js:63
+msgid "Show music note icon"
+msgstr ""
+
+#: prefs.js:67
+msgid "Panel position"
+msgstr ""
+
+#: prefs.js:69
+msgid "Left"
+msgstr ""
+
+#: prefs.js:70
+msgid "Right"
+msgstr ""
+
+#: prefs.js:71
+msgid "Center"
+msgstr ""
+
+#: prefs.js:72
+msgid "Far left"
+msgstr ""
+
+#: prefs.js:73
+msgid "Far right"
+msgstr ""
+
+#: prefs.js:76
+msgid "Left and Right stay near the center; Far positions use the outer edge"
+msgstr ""
+
+#: prefs.js:80
+msgid "Maximum panel width"
+msgstr ""
+
+#: prefs.js:81
+msgid "Maximum width of lyrics in the top bar"
+msgstr ""
+
+#: prefs.js:104
+msgid "Hide lyrics when paused"
+msgstr ""
+
+#: prefs.js:105
+msgid "Keep the popup state while hiding the panel item"
+msgstr ""
+
+#: prefs.js:107
+msgid "Lyrics"
+msgstr ""
+
+#: prefs.js:112
+msgid "Show title when lyrics are unavailable"
+msgstr ""
+
+#: prefs.js:116
+msgid "Word-synced highlighting"
+msgstr ""
+
+#: prefs.js:117
+msgid "Highlight the current word when timing is available"
+msgstr ""
+
+#: prefs.js:120
+msgid "Global lyrics offset"
+msgstr ""
+
+#: prefs.js:121
+msgid "Added to each track-specific offset"
+msgstr ""
+
+#: prefs.js:143 prefs.js:188
+msgid "Translation"
+msgstr ""
+
+#: prefs.js:144
+msgid ""
+"Translations are aligned by lyric line and never change original timing."
+msgstr ""
+
+#: prefs.js:150
+msgid "Enable translation"
+msgstr ""
+
+#: prefs.js:151
+msgid "Original lyrics remain available if translation fails"
+msgstr ""
+
+#: prefs.js:155
+msgid "Translate automatically"
+msgstr ""
+
+#: prefs.js:156
+msgid "Use a cached translation first; otherwise contact the provider"
+msgstr ""
+
+#: prefs.js:159
+msgid "Target language"
+msgstr ""
+
+#: prefs.js:163
+msgid "e.g. zh-CN, en, ja"
+msgstr ""
+
+#: prefs.js:176
+msgid "Popup display"
+msgstr ""
+
+#: prefs.js:178
+msgid "Original + Translation"
+msgstr ""
+
+#: prefs.js:179
+msgid "Original only"
+msgstr ""
+
+#: prefs.js:180
+msgid "Translation only"
+msgstr ""
+
+#: prefs.js:185
+msgid "Panel lyrics"
+msgstr ""
+
+#: prefs.js:187
+msgid "Original"
+msgstr ""
+
+#: prefs.js:193
+msgid "Provider"
+msgstr ""
+
+#: prefs.js:199
+msgid "Translation API key"
+msgstr ""
+
+#: prefs.js:200
+msgid "Checking Secret Service…"
+msgstr ""
+
+#: prefs.js:203
+msgid "Configure"
+msgstr ""
+
+#: prefs.js:216
+msgid "Configured in GNOME Secret Service"
+msgstr ""
+
+#: prefs.js:217
+msgid "Not configured"
+msgstr ""
+
+#: prefs.js:221
+msgid "Secret Service unavailable"
+msgstr ""
+
+#: prefs.js:231
+msgid "API key"
+msgstr ""
+
+#: prefs.js:235
+msgid "Translation credential"
+msgstr ""
+
+#: prefs.js:237
+msgid "Enter a new key to replace the saved credential."
+msgstr ""
+
+#: prefs.js:238
+msgid "The key will be stored in GNOME Secret Service."
+msgstr ""
+
+#: prefs.js:243
+msgid "Cancel"
+msgstr ""
+
+#: prefs.js:245
+msgid "Remove"
+msgstr ""
+
+#: prefs.js:249
+msgid "Save"
+msgstr ""
+
+#: prefs.js:270
+msgid "Could not update credential in Secret Service"
+msgstr ""
+
+#: prefs.js:282
+msgid "Could not open credential configuration"
+msgstr ""
+
+#: prefs.js:290
+msgid "Choose among currently available players from the extension popup."
+msgstr ""
+
+#: prefs.js:294
+msgid "Preferred player"
+msgstr ""
+
+#: prefs.js:308
+msgid "Storage"
+msgstr ""
+
+#: prefs.js:309
+msgid "Cached lyrics are stored locally and expire automatically."
+msgstr ""
+
+#: prefs.js:313
+msgid "Lyrics cache"
+msgstr ""
+
+#: prefs.js:314
+msgid "Positive results: 30 days; unavailable lyrics: 24 hours"
+msgstr ""
+
+#: prefs.js:317
+msgid "Clear Lyrics Cache"
+msgstr ""
+
+#: prefs.js:330
+msgid "Lyrics cache cleared"
+msgstr ""
+
+#: prefs.js:333
+#, javascript-format
+msgid "Could not clear cache: %s"
+msgstr ""
+
+#: prefs.js:343
+msgid "Translation cache"
+msgstr ""
+
+#: prefs.js:344
+msgid "Checking cached translations…"
+msgstr ""
+
+#: prefs.js:347
+msgid "Clear Translation Cache"
+msgstr ""
+
+#: prefs.js:359
+#, javascript-format
+msgid "%d cached song"
+msgid_plural "%d cached songs"
+msgstr[0] ""
+msgstr[1] ""
+
+#: prefs.js:362
+msgid "Could not inspect cache"
+msgstr ""
+
+#: prefs.js:374
+msgid "Translation cache cleared"
+msgstr ""
+
+#: prefs.js:378
+msgid "Could not clear translation cache"
+msgstr ""

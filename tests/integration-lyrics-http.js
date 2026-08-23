@@ -83,6 +83,10 @@ server.add_handler(null, (currentServer, message) => {
     } else if (query.includes('Malformed LRC')) {
         response(message, Soup.Status.OK,
             '{"syncedLyrics":"this has no timestamps"}');
+    } else if (query.includes('Large Response')) {
+        response(message, Soup.Status.OK, JSON.stringify({
+            syncedLyrics: `[00:01.00]${'x'.repeat(256)}`,
+        }));
     } else if (query.includes('Slow Request')) {
         currentServer.pause_message(message);
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
@@ -99,7 +103,7 @@ server.add_handler(null, (currentServer, message) => {
 server.listen_local(0, Soup.ServerListenOptions.IPV4_ONLY);
 
 const baseUri = server.get_uris()[0].to_string().replace(/\/$/, '');
-const provider = new LyricsProvider({
+let provider = new LyricsProvider({
     apiUrl: `${baseUri}/api/get`,
     requestSpacingMs: 0,
     timeoutSeconds: 2,
@@ -131,7 +135,7 @@ async function run() {
         validQuery.includes('album_name=HTTP Integration') &&
         validQuery.includes('duration=120'),
         'the LRCLIB request must include title, artist, album and duration');
-    assert(validRequest.userAgent === 'MPRIS Lyrics/5.0 (mpris-lyrics@eureka)',
+    assert(validRequest.userAgent === 'MPRIS Lyrics/0.9.0 (mpris-lyrics@eureka)',
         'requests should identify this extension, not impersonate a browser');
     const afterFirstValid = receivedRequests.length;
     const cachedValid = await fetch('Valid Lyrics');
@@ -150,6 +154,20 @@ async function run() {
         'a no-lyrics result should be served from the session cache');
     assert(await fetch('Malformed LRC') === null,
         'malformed LRC should safely return no lyrics');
+
+    const limitedProvider = new LyricsProvider({
+        apiUrl: `${baseUri}/api/get`,
+        requestSpacingMs: 0,
+        maxResponseBytes: 64,
+        persistentCache: false,
+    });
+    const oversized = await new Promise(resolve => {
+        limitedProvider.fetch(
+            {...baseTrack, title: 'Large Response'}, resolve);
+    });
+    assert(oversized === null,
+        'an LRCLIB response above the configured limit should be rejected');
+    limitedProvider.destroy();
 
     await fetch('Cache A');
     await fetch('Cache B');
@@ -226,6 +244,7 @@ async function run() {
         () => destroyedCallbacks++);
     await sleep(50);
     provider.destroy();
+    provider = null;
     await sleep(650);
     assert(destroyedCallbacks === 0,
         'destroy() must suppress an in-flight Soup response');
@@ -236,7 +255,7 @@ run()
     .finally(() => loop.quit());
 loop.run();
 
-provider.destroy();
+provider?.destroy();
 server.disconnect();
 
 if (scenarioError)

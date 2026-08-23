@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - name: Install test dependencies
+        run: >-
+          dnf --setopt=install_weak_deps=False install -y
+          dbus-daemon gettext gjs glib2 gnome-shell libsecret libsoup3
+          make ripgrep unzip
+
+      - uses: actions/checkout@v4
+
+      - name: Run deterministic checks
+        run: make check
+
+      - name: Run local integration checks
+        run: make integration
+
+      - name: Upload tested extension package
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpris-lyrics-gnome-50
+          path: mpris-lyrics@eureka.shell-extension.zip
+          if-no-files-found: error
+

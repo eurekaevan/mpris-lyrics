@@ -39,7 +39,6 @@ export class ArtworkView {
         this._displayedFile = null;
         this._contentSignalId = 0;
         this._decodeTimeoutId = 0;
-        this._destroyed = false;
 
         this.actor = new St.Widget({
             style_class: 'mpris-lyrics-artwork',
@@ -73,7 +72,7 @@ export class ArtworkView {
         this._artUrl = nextUrl;
         this._trackKey = trackKey;
         this._resetRequest();
-        if (!nextUrl || !trackKey || this._destroyed) {
+        if (!nextUrl || !trackKey) {
             this._discardDisplayedTexture();
             this._showFallback();
             return;
@@ -111,28 +110,20 @@ export class ArtworkView {
     }
 
     destroy() {
-        if (this._destroyed)
-            return;
-        this._destroyed = true;
         this._generation++;
         this._resetRequest();
         this._discardDisplayedTexture();
-        this._loader?.destroy();
+        this._loader.destroy();
         this._loader = null;
         this._animationsEnabled = null;
-        this.actor?.destroy();
+        this.actor.destroy();
         this.actor = null;
     }
 
     _loadTexture(file, remote, generation, requestTrackKey) {
-        let resourceScale = 1;
-        try {
-            const {scaleFactor} = St.ThemeContext.get_for_stage(global.stage);
-            resourceScale = Math.max(1, Math.ceil(
-                scaleFactor * (this.actor.get_resource_scale?.() ?? 1)));
-        } catch {
-            // A not-yet-mapped actor uses the logical 1x fallback.
-        }
+        const {scaleFactor} = St.ThemeContext.get_for_stage(global.stage);
+        const resourceScale = Math.max(1, Math.ceil(
+            scaleFactor * this.actor.get_resource_scale()));
 
         const texture = St.TextureCache.get_default().load_file_async(
             file, ARTWORK_SIZE, ARTWORK_SIZE, 1, resourceScale);
@@ -178,8 +169,10 @@ export class ArtworkView {
     }
 
     _isCurrent(generation, trackKey, cancellable) {
-        return !this._destroyed && generation === this._generation &&
-            trackKey === this._trackKey && !cancellable.is_cancelled();
+        return this.actor !== null && generation === this._generation &&
+            trackKey === this._trackKey &&
+            this._cancellable === cancellable &&
+            !cancellable.is_cancelled();
     }
 
     _showFallback() {

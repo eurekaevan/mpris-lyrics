@@ -90,15 +90,12 @@ export class ArtworkLoader {
         this._session = new Soup.Session({
             timeout: timeoutSeconds,
             'idle-timeout': timeoutSeconds,
-            'user-agent': 'MPRIS Lyrics/5.0 (mpris-lyrics@eureka)',
+            'user-agent': 'MPRIS Lyrics/0.9.0 (mpris-lyrics@eureka)',
         });
-        this._destroyed = false;
+        this._maintenanceCancellable = new Gio.Cancellable();
     }
 
     async load(artUrl, cancellable = null) {
-        if (this._destroyed)
-            throw new Error('artwork loader is destroyed');
-
         const url = typeof artUrl === 'string' ? artUrl.trim() : '';
         const scheme = urlScheme(url);
         switch (scheme) {
@@ -119,15 +116,15 @@ export class ArtworkLoader {
     discard(file) {
         if (!file || !this._isCacheFile(file))
             return;
-        file.delete_async(GLib.PRIORITY_DEFAULT, null).catch(() => {});
+        file.delete_async(
+            GLib.PRIORITY_DEFAULT, this._maintenanceCancellable).catch(() => {});
     }
 
     destroy() {
-        if (this._destroyed)
-            return;
-        this._destroyed = true;
-        this._session?.abort();
+        this._session.abort();
         this._session = null;
+        this._maintenanceCancellable.cancel();
+        this._maintenanceCancellable = null;
     }
 
     async _loadLocalFile(url, cancellable) {
@@ -150,7 +147,7 @@ export class ArtworkLoader {
             `${cacheHash(url)}.image`);
         if (await this._isUsableCacheFile(cacheFile, cancellable)) {
             try {
-                await this._touch(cacheFile);
+                await this._touch(cacheFile, cancellable);
             } catch {
                 // A usable cached image should survive timestamp failures.
             }
@@ -192,7 +189,7 @@ export class ArtworkLoader {
             await closeStream(stream);
         }
 
-        await this._evictOldest();
+        await this._evictOldest(cancellable);
         return {file: cacheFile, fromCache: false, remote: true};
     }
 
@@ -242,7 +239,7 @@ export class ArtworkLoader {
         }
     }
 
-    async _touch(file) {
+    async _touch(file, cancellable) {
         const info = new Gio.FileInfo();
         info.set_attribute_uint64(
             'time::modified', Math.floor(Date.now() / 1000));
@@ -250,17 +247,17 @@ export class ArtworkLoader {
             info,
             Gio.FileQueryInfoFlags.NONE,
             GLib.PRIORITY_DEFAULT,
-            null);
+            cancellable);
     }
 
-    async _evictOldest() {
+    async _evictOldest(cancellable) {
         let enumerator;
         try {
             enumerator = await this._cacheDirectory.enumerate_children_async(
                 'standard::name,standard::type,standard::size,time::modified',
                 Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS,
                 GLib.PRIORITY_DEFAULT,
-                null);
+                cancellable);
         } catch (error) {
             if (isIoError(error, Gio.IOErrorEnum.NOT_FOUND))
                 return;
@@ -271,7 +268,7 @@ export class ArtworkLoader {
         try {
             while (true) {
                 const batch = await enumerator.next_files_async(
-                    64, GLib.PRIORITY_DEFAULT, null);
+                    64, GLib.PRIORITY_DEFAULT, cancellable);
                 if (batch.length === 0)
                     break;
                 for (const info of batch) {
@@ -298,7 +295,7 @@ export class ArtworkLoader {
                 break;
             try {
                 await this._cacheDirectory.get_child(entry.name)
-                    .delete_async(GLib.PRIORITY_DEFAULT, null);
+                    .delete_async(GLib.PRIORITY_DEFAULT, cancellable);
             } catch (error) {
                 if (!isIoError(error, Gio.IOErrorEnum.NOT_FOUND))
                     console.debug(`MPRIS Lyrics: artwork cache eviction failed: ${error.message}`);

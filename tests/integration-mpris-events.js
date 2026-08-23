@@ -165,7 +165,7 @@ let state = null;
 let callbackCount = 0;
 let players = [];
 let scenarioError = null;
-const manager = new MprisManager(nextState => {
+let manager = new MprisManager(nextState => {
     state = nextState;
     callbackCount++;
 }, {
@@ -272,6 +272,7 @@ async function run() {
         'the returning player was not removed cleanly');
 
     manager.destroy();
+    manager = null;
     const callbacksAfterDestroy = callbackCount;
     requestName();
     await sleep(200);
@@ -285,7 +286,7 @@ run()
     .finally(() => loop.quit());
 loop.run();
 
-manager.destroy();
+manager?.destroy();
 try {
     releaseName();
 } catch {

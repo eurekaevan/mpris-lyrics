@@ -107,8 +107,7 @@ const sampleTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
 
     const index = LyricsSynchronizer.currentLineIndex(
         document, positionUs / 1000);
-    const line = document?.lines?.[index]?.text ?? '';
-    print(`sample=${state.playbackStatus},${Math.round(positionUs)},${line}`);
+    print(`sample=${state.playbackStatus},${Math.round(positionUs)},line=${index}`);
     previousSample = {positionUs, status: state.playbackStatus};
     return GLib.SOURCE_CONTINUE;
 });

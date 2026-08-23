@@ -1,6 +1,9 @@
 import GLib from 'gi://GLib';
 
-import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import {
+    Extension,
+    gettext as _,
+} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {LyricsIndicator} from './indicator.js';
@@ -76,7 +79,6 @@ function displayMetadataKey(metadata) {
 
 export default class MprisLyricsExtension extends Extension {
     enable() {
-        this._enabled = true;
         this._lineTimerId = 0;
         this._wordTimerId = 0;
         this._progressTimerId = 0;
@@ -111,7 +113,7 @@ export default class MprisLyricsExtension extends Extension {
             onOffsetAdjust: deltaMs => this._adjustTrackOffset(deltaMs),
             onOffsetReset: () => this._setTrackOffsetMs(0),
             onPlayerSelected: stableId => {
-                this._settings?.set_string('preferred-player', stableId);
+                this._settings.set_string('preferred-player', stableId);
             },
             onPopupOpenChanged: open => this._onPopupOpenChanged(open),
             onTranslationAction: options =>
@@ -149,7 +151,6 @@ export default class MprisLyricsExtension extends Extension {
     }
 
     disable() {
-        this._enabled = false;
         this._stopLineTimer();
         this._stopWordTimer();
         this._stopProgressTimer();
@@ -262,11 +263,14 @@ export default class MprisLyricsExtension extends Extension {
         });
         connect('translation-cache-clear-generation', () => {
             this._cancelTranslation();
-            this._translationService?.clearCache().then(() => {
-                if (this._enabled && this._translationEnabled)
+            const service = this._translationService;
+            service.clearCache().then(() => {
+                if (this._translationService === service &&
+                    this._translationEnabled)
                     this._requestTranslation();
-            }).catch(() => {
-                console.warn('MPRIS Lyrics: could not clear translation cache');
+            }).catch(error => {
+                if (this._translationService === service)
+                    console.warn(`MPRIS Lyrics: could not clear translation cache: ${error.message}`);
             });
             this._clearTranslation('idle');
         });
@@ -290,6 +294,8 @@ export default class MprisLyricsExtension extends Extension {
     }
 
     _panelBox(boxName) {
+        // GNOME Shell 50 has no public API for moving an existing status-area
+        // item. Keep the private panel-box compatibility risk isolated here.
         return Main.panel[`_${boxName}Box`];
     }
 
@@ -312,9 +318,6 @@ export default class MprisLyricsExtension extends Extension {
     }
 
     _onPlayerStateChanged(state) {
-        if (!this._enabled)
-            return;
-
         const previousState = this._state;
         this._state = state;
 
@@ -350,7 +353,7 @@ export default class MprisLyricsExtension extends Extension {
             this._trackOffsetMs = this._offsetStore.get(state.metadata);
             this._indicator.setOffsets(
                 this._trackOffsetMs, this._globalOffsetMs);
-            this._indicator.setText(this._panelText(trackInfo(state.metadata)));
+            this._indicator.setText(trackInfo(state.metadata));
             this._indicator.setTrack(state.metadata, identity);
             this._indicator.setTranslation(null);
             this._indicator.setTranslationState('idle');
@@ -358,8 +361,10 @@ export default class MprisLyricsExtension extends Extension {
 
             const requestedKey = key;
             const requestedIdentity = identity;
-            this._lyricsProvider.fetch(state.metadata, document => {
-                if (!this._enabled || requestedKey !== this._currentTrackKey ||
+            const provider = this._lyricsProvider;
+            provider.fetch(state.metadata, document => {
+                if (this._lyricsProvider !== provider ||
+                    requestedKey !== this._currentTrackKey ||
                     requestedIdentity !== this._currentTrackIdentity)
                     return;
 
@@ -398,7 +403,7 @@ export default class MprisLyricsExtension extends Extension {
     }
 
     _onPlayersChanged(players) {
-        if (!this._enabled || !this._settings)
+        if (!this._settings)
             return;
 
         this._indicator?.setPlayers(
@@ -406,7 +411,7 @@ export default class MprisLyricsExtension extends Extension {
     }
 
     _onOffsetStoreLoaded() {
-        if (!this._enabled || !this._state || !this._offsetStore)
+        if (!this._state || !this._offsetStore)
             return;
 
         this._trackOffsetMs = this._offsetStore.get(this._state.metadata);
@@ -440,11 +445,12 @@ export default class MprisLyricsExtension extends Extension {
         forceRefresh = false,
         allowNetwork = null,
     } = {}) {
-        if (!this._enabled || !this._translationEnabled ||
+        if (!this._translationEnabled ||
             !this._translationService || !this._lyricsDocument ||
             !this._currentTrackKey)
             return;
 
+        const service = this._translationService;
         const generation = ++this._translationGeneration;
         const requestedTrackKey = this._currentTrackKey;
         const requestedHash = sourceLyricsHash(this._lyricsDocument);
@@ -454,7 +460,7 @@ export default class MprisLyricsExtension extends Extension {
         const useNetwork = allowNetwork ??
             this._settings.get_boolean('auto-translate');
 
-        this._translationService.translate(this._lyricsDocument, {
+        service.translate(this._lyricsDocument, {
             trackKey: requestedTrackKey,
             targetLanguage,
             providerId,
@@ -466,7 +472,8 @@ export default class MprisLyricsExtension extends Extension {
                     this._indicator?.setTranslationState(result.status);
             },
         }).then(result => {
-            if (!this._enabled || generation !== this._translationGeneration ||
+            if (this._translationService !== service ||
+                generation !== this._translationGeneration ||
                 requestedTrackKey !== this._currentTrackKey ||
                 requestedHash !== sourceLyricsHash(this._lyricsDocument))
                 return;
@@ -495,7 +502,8 @@ export default class MprisLyricsExtension extends Extension {
             }
             this._updateIndicatorAndSchedule(true);
         }).catch(() => {
-            if (generation !== this._translationGeneration)
+            if (this._translationService !== service ||
+                generation !== this._translationGeneration)
                 return;
             this._indicator?.setTranslationState(
                 TranslationStatus.PROVIDER_ERROR);
@@ -533,7 +541,7 @@ export default class MprisLyricsExtension extends Extension {
             GLib.PRIORITY_DEFAULT,
             PROGRESS_UPDATE_INTERVAL_MS,
             () => {
-                if (!this._enabled || !this._indicator?.isPopupOpen()) {
+                if (!this._indicator || !this._indicator.isPopupOpen()) {
                     this._progressTimerId = 0;
                     return GLib.SOURCE_REMOVE;
                 }
@@ -578,7 +586,7 @@ export default class MprisLyricsExtension extends Extension {
         const effectivePositionMs = this._effectivePositionMs();
 
         if (document?.instrumental) {
-            panelContent = 'Instrumental';
+            panelContent = _('Instrumental');
             this._currentLyricIndex = -1;
             this._indicator.setCurrentLyricIndex(-1);
         } else if (document && document.syncLevel !== SyncLevel.NONE) {
@@ -651,7 +659,7 @@ export default class MprisLyricsExtension extends Extension {
                     playbackRate,
                 };
             }
-            this._indicator.setText(this._panelText(panelContent), {
+            this._indicator.setText(panelContent, {
                 scrollable: panelContentIsLyric,
                 timeline: panelTimeline,
                 contentKey: panelContentKey,
@@ -681,7 +689,7 @@ export default class MprisLyricsExtension extends Extension {
             Math.max(1, Math.ceil(delayMs)),
             () => {
                 this._lineTimerId = 0;
-                if (this._enabled)
+                if (this._indicator)
                     this._updateIndicatorAndSchedule();
                 return GLib.SOURCE_REMOVE;
             });
@@ -722,16 +730,12 @@ export default class MprisLyricsExtension extends Extension {
             Math.max(1, Math.ceil(delayMs)),
             () => {
                 this._wordTimerId = 0;
-                if (this._enabled)
+                if (this._indicator)
                     this._updateWordAndSchedule();
                 return GLib.SOURCE_REMOVE;
             });
         GLib.Source.set_name_by_id(
             this._wordTimerId, '[mpris-lyrics] next lyric word boundary');
-    }
-
-    _panelText(content) {
-        return content;
     }
 
     _adjustTrackOffset(deltaMs) {

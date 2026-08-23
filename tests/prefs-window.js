@@ -1,6 +1,10 @@
 import Adw from 'gi://Adw';
+import Gdk from 'gi://Gdk';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Graphene from 'gi://Graphene';
+import Gsk from 'gi://Gsk';
+import Gtk from 'gi://Gtk';
 
 import {programArgs} from 'system';
 
@@ -16,6 +20,24 @@ function descendants(widget) {
         result.push(child, ...descendants(child));
     }
     return result;
+}
+
+function takeWidgetScreenshot(widget, path) {
+    const width = widget.get_width();
+    const height = widget.get_height();
+    const paintable = new Gtk.WidgetPaintable({widget});
+    const snapshot = new Gtk.Snapshot();
+    paintable.snapshot(snapshot, width, height);
+    const node = snapshot.to_node();
+    assert(node, 'preferences screenshot did not produce a render node');
+
+    const bounds = new Graphene.Rect();
+    bounds.init(0, 0, width, height);
+    const renderer = Gsk.Renderer.new_for_surface(widget.get_surface());
+    const texture = renderer.render_texture(node, bounds);
+    assert(texture instanceof Gdk.Texture && texture.save_to_png(path),
+        'preferences screenshot could not be saved');
+    renderer.unrealize();
 }
 
 imports.package.init({
@@ -37,7 +59,15 @@ const metadataPath = GLib.build_filenamev([extensionPath, 'metadata.json']);
 const [ok, metadataContents] = GLib.file_get_contents(metadataPath);
 assert(ok, 'the installed extension metadata could not be read');
 const metadata = JSON.parse(new TextDecoder().decode(metadataContents));
+assert(metadata.url === 'https://github.com/eurekaevan/mpris-lyrics' &&
+    metadata['gettext-domain'] === 'mpris-lyrics@eureka' &&
+    !Object.hasOwn(metadata, 'version'),
+'preferences should load release metadata without deprecated version');
 const directory = Gio.File.new_for_path(extensionPath);
+const effectiveLocale = GLib.getenv('LC_ALL') ??
+    GLib.getenv('LANGUAGE') ?? GLib.getenv('LANG') ?? '';
+const simplifiedChinese = effectiveLocale.startsWith('zh_CN');
+const uiText = (english, chinese) => simplifiedChinese ? chinese : english;
 
 const application = new Adw.Application({
     application_id: 'org.gnome.Shell.Extensions.MprisLyricsPrefsTest',
@@ -66,6 +96,17 @@ application.connect('activate', async app => {
                 assert(window.get_visible_page(),
                     'the preferences window did not provide a visible page');
                 const widgets = descendants(window);
+                const visibleTitle = window.get_visible_page().title;
+                assert(visibleTitle === uiText('General', '常规'),
+                    `preferences page title was ${JSON.stringify(visibleTitle)}`);
+                assert(widgets.some(widget =>
+                    widget instanceof Adw.PreferencesGroup &&
+                    widget.title === uiText('Panel', '顶栏')),
+                'preferences should translate group titles');
+                assert(widgets.some(widget =>
+                    widget instanceof Adw.SwitchRow &&
+                    widget.title === uiText('Enable translation', '启用翻译')),
+                'preferences should translate setting rows');
                 assert(widgets.filter(widget => widget instanceof Adw.SwitchRow)
                     .length === 6,
                 'preferences should contain six boolean SwitchRows');
@@ -78,6 +119,10 @@ application.connect('activate', async app => {
                 assert(widgets.filter(widget => widget instanceof Adw.EntryRow)
                     .length === 1,
                 'preferences should expose one arbitrary target-language entry');
+                const screenshotPath = GLib.getenv(
+                    'MPRIS_LYRICS_PREFS_SCREENSHOT_PATH');
+                if (screenshotPath)
+                    takeWidgetScreenshot(window, screenshotPath);
                 print('GTK4/Libadwaita preferences window test passed');
                 window.close();
                 app.release();

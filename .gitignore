@@ -1,1 +1,15 @@
 *.shell-extension.zip
+schemas/gschemas.compiled
+locale/
+build/
+dist/
+node_modules/
+.cache/
+.env
+.env.local
+*.secret
+*.swp
+*~
+.idea/
+.vscode/
+docs/screenshots/tmp-*

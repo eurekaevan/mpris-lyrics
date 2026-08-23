@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    container: fedora:44
+    steps:
+      - name: Install release dependencies
+        run: >-
+          dnf --setopt=install_weak_deps=False install -y
+          dbus-daemon gettext gjs glib2 gnome-shell libsecret libsoup3
+          make ripgrep unzip
+
+      - uses: actions/checkout@v4
+
+      - name: Verify tag and package
+        shell: bash
+        run: |
+          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          make check
+          make integration
+          sha256sum mpris-lyrics@eureka.shell-extension.zip \
+            > mpris-lyrics@eureka.shell-extension.zip.sha256
+
+      - name: Attach verified release files
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            mpris-lyrics@eureka.shell-extension.zip
+            mpris-lyrics@eureka.shell-extension.zip.sha256
+          fail_on_unmatched_files: true
+          generate_release_notes: false

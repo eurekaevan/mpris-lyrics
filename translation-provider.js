@@ -8,8 +8,61 @@ export const OPENAI_PROVIDER_ID = 'openai';
 export const OPENAI_MODEL = 'gpt-5.4-mini-2026-03-17';
 export const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses';
 
-const USER_AGENT = 'MPRIS Lyrics/5.0 (mpris-lyrics@eureka)';
+const USER_AGENT = 'MPRIS Lyrics/0.9.0 (mpris-lyrics@eureka)';
 const MAX_RATE_LIMIT_RETRIES = 1;
+const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const READ_CHUNK_BYTES = 64 * 1024;
+
+Gio._promisify(Gio.InputStream.prototype,
+    'read_bytes_async', 'read_bytes_finish');
+Gio._promisify(Gio.InputStream.prototype,
+    'close_async', 'close_finish');
+Gio._promisify(Soup.Session.prototype,
+    'send_async', 'send_finish');
+
+class ResponseTooLargeError extends Error {}
+
+async function readResponse(session, message, limit, cancellable) {
+    const stream = await session.send_async(
+        message, GLib.PRIORITY_DEFAULT, cancellable);
+    try {
+        if (message.status_code < 200 || message.status_code >= 300)
+            return GLib.Bytes.new(new Uint8Array());
+
+        const contentLength = message.get_response_headers()
+            .get_content_length();
+        if (contentLength > limit)
+            throw new ResponseTooLargeError();
+
+        const chunks = [];
+        let total = 0;
+        while (true) {
+            const bytes = await stream.read_bytes_async(
+                READ_CHUNK_BYTES, GLib.PRIORITY_DEFAULT, cancellable);
+            const size = bytes.get_size();
+            if (size === 0)
+                break;
+            total += size;
+            if (total > limit)
+                throw new ResponseTooLargeError();
+            chunks.push(bytes.get_data());
+        }
+
+        const contents = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) {
+            contents.set(chunk, offset);
+            offset += chunk.length;
+        }
+        return GLib.Bytes.new(contents);
+    } finally {
+        try {
+            await stream.close_async(GLib.PRIORITY_DEFAULT, null);
+        } catch {
+            // The request error is more useful than a stream-close error.
+        }
+    }
+}
 
 export class TranslationProviderError extends Error {
     constructor(code, message, retryAfterMs = null) {
@@ -42,18 +95,28 @@ function delay(milliseconds, cancellable) {
 
     return new Promise((resolve, reject) => {
         let signalId = 0;
-        const timerId = GLib.timeout_add(
+        let timerId = GLib.timeout_add(
             GLib.PRIORITY_DEFAULT,
             Math.max(1, Math.ceil(milliseconds)),
             () => {
-                if (signalId)
+                timerId = 0;
+                if (signalId) {
                     cancellable.disconnect(signalId);
+                    signalId = 0;
+                }
                 resolve();
                 return GLib.SOURCE_REMOVE;
             });
         if (cancellable) {
             signalId = cancellable.connect(() => {
-                GLib.source_remove(timerId);
+                if (timerId) {
+                    GLib.source_remove(timerId);
+                    timerId = 0;
+                }
+                if (signalId) {
+                    cancellable.disconnect(signalId);
+                    signalId = 0;
+                }
                 reject(canceledError());
             });
         }
@@ -146,12 +209,14 @@ export class OpenAITranslationProvider {
         endpoint = OPENAI_RESPONSES_URL,
         model = OPENAI_MODEL,
         timeoutSeconds = 45,
+        maxResponseBytes = MAX_RESPONSE_BYTES,
     } = {}) {
         this.id = OPENAI_PROVIDER_ID;
         this.displayName = 'OpenAI';
         this.model = model;
         this.requiresCredential = true;
         this._endpoint = endpoint;
+        this._maxResponseBytes = Math.max(1, Math.floor(maxResponseBytes));
         this._session = new Soup.Session({
             timeout: timeoutSeconds,
             'idle-timeout': timeoutSeconds,
@@ -180,23 +245,17 @@ export class OpenAITranslationProvider {
 
         let bytes;
         try {
-            bytes = await new Promise((resolve, reject) => {
-                this._session.send_and_read_async(
-                    message,
-                    GLib.PRIORITY_DEFAULT,
-                    cancellable,
-                    (session, result) => {
-                        try {
-                            resolve(session.send_and_read_finish(result));
-                        } catch (error) {
-                            reject(error);
-                        }
-                    });
-            });
+            bytes = await readResponse(this._session, message,
+                this._maxResponseBytes, cancellable);
         } catch (error) {
             if (cancellable?.is_cancelled() ||
                 error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 throw canceledError();
+            if (error instanceof ResponseTooLargeError) {
+                throw new TranslationProviderError(
+                    'invalid_response',
+                    'Translation response exceeded the size limit');
+            }
             throw new TranslationProviderError(
                 'network_error', 'Translation network request failed');
         }

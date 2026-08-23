@@ -43,7 +43,7 @@ export class TranslationService {
         this._cache = cache;
         this._batchingOptions = batchingOptions;
         this._inFlight = new Map();
-        this._destroyed = false;
+        this._maintenanceCancellable = null;
     }
 
     translate(document, {
@@ -93,7 +93,7 @@ export class TranslationService {
             options.onStatus?.(status);
             return status;
         };
-        if (this._destroyed || options.cancellable.is_cancelled())
+        if (options.cancellable.is_cancelled())
             return notify({status: TranslationStatus.CANCELED});
         if (!document || document.instrumental || !options.lyricsHash ||
             !document.lines.some(line => line.text.trim()))
@@ -182,7 +182,7 @@ export class TranslationService {
                 lines: translatedLines,
             });
             try {
-                await this._cache.put(translation);
+                await this._cache.put(translation, options.cancellable);
             } catch {
                 console.warn('MPRIS Lyrics: could not save translation cache');
             }
@@ -214,12 +214,21 @@ export class TranslationService {
 
     async clearCache() {
         this.cancelAll();
-        await this._cache.clear();
+        this._maintenanceCancellable?.cancel();
+        const cancellable = new Gio.Cancellable();
+        this._maintenanceCancellable = cancellable;
+        try {
+            await this._cache.clear(cancellable);
+        } finally {
+            if (this._maintenanceCancellable === cancellable)
+                this._maintenanceCancellable = null;
+        }
     }
 
     destroy() {
-        this._destroyed = true;
         this.cancelAll();
+        this._maintenanceCancellable?.cancel();
+        this._maintenanceCancellable = null;
         for (const provider of this._providers.values())
             provider.destroy?.();
         this._providers.clear();

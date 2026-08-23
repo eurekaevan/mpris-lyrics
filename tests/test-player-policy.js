@@ -1,3 +1,4 @@
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 
 import {MprisManager, stablePlayerId} from '../mpris.js';
@@ -60,7 +61,7 @@ let descriptors = [];
 const manager = new MprisManager(
     state => (selected = state),
     {onPlayersChanged: players => (descriptors = players)});
-manager._running = true;
+manager._cancellable = new Gio.Cancellable();
 
 const firefox = player({
     name: 'org.mpris.MediaPlayer2.firefox.instance_1_166',

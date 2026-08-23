@@ -8,6 +8,7 @@ import St from 'gi://St';
 
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
+import {gettext as _} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 import {ArtworkView} from './artwork-view.js';
 import {
@@ -451,13 +452,13 @@ export class LyricsIndicator {
             x_expand: true,
         });
         this._translationStatusLabel = new St.Label({
-            text: 'Translation available on request',
+            text: _('Translation available on request'),
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
         this._translationActionButton = new St.Button({
             style_class: 'button flat mpris-lyrics-translation-button',
-            label: 'Translate',
+            label: _('Translate'),
             can_focus: true,
         });
         translationControls.add_child(this._translationStatusLabel);
@@ -481,16 +482,16 @@ export class LyricsIndicator {
         });
         const offsetTitle = new St.Label({
             style_class: 'mpris-lyrics-offset-title',
-            text: 'Lyrics timing',
+            text: _('Lyrics timing'),
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
         titleRow.add_child(offsetTitle);
         this._resetButton = new St.Button({
             style_class: 'button flat mpris-lyrics-reset-button',
-            label: 'Reset',
+            label: _('Reset'),
             can_focus: true,
-            accessible_name: 'Reset lyrics offset',
+            accessible_name: _('Reset lyrics offset'),
         });
         titleRow.add_child(this._resetButton);
         offsetBox.add_child(titleRow);
@@ -503,7 +504,7 @@ export class LyricsIndicator {
             style_class: 'button flat mpris-lyrics-offset-button',
             label: '−0.5 s',
             can_focus: true,
-            accessible_name: 'Decrease lyrics offset by 0.5 seconds',
+            accessible_name: _('Decrease lyrics offset by 0.5 seconds'),
         });
         this._offsetLabel = new St.Label({
             style_class: 'mpris-lyrics-offset-label',
@@ -515,7 +516,7 @@ export class LyricsIndicator {
             style_class: 'button flat mpris-lyrics-offset-button',
             label: '+0.5 s',
             can_focus: true,
-            accessible_name: 'Increase lyrics offset by 0.5 seconds',
+            accessible_name: _('Increase lyrics offset by 0.5 seconds'),
         });
         controls.add_child(this._decreaseButton);
         controls.add_child(this._offsetLabel);
@@ -523,7 +524,7 @@ export class LyricsIndicator {
         offsetBox.add_child(controls);
         this._effectiveOffsetLabel = new St.Label({
             style_class: 'mpris-lyrics-effective-offset',
-            text: 'Global +0.0s  •  Effective +0.0s',
+            text: _('Global +0.0 s  ·  Effective +0.0 s'),
             x_align: Clutter.ActorAlign.CENTER,
             x_expand: true,
         });
@@ -532,7 +533,7 @@ export class LyricsIndicator {
         this.actor.menu.addMenuItem(offsetItem);
 
         this.actor.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._playerMenu = new PopupMenu.PopupSubMenuMenuItem('Player', false);
+        this._playerMenu = new PopupMenu.PopupSubMenuMenuItem(_('Player'), false);
         this._playerMenu.add_style_class_name('mpris-lyrics-player');
         this._playerMenu.label.add_style_class_name(
             'mpris-lyrics-player-label');
@@ -564,7 +565,7 @@ export class LyricsIndicator {
         this.setOffsets(0, 0);
         this.setPlayers([], 'auto');
         this.setTranslationEnabled(false);
-        this._showLyricsMessage('No synchronized lyrics');
+        this._showLyricsMessage(_('No lyrics found'));
     }
 
     setText(text, {
@@ -613,7 +614,7 @@ export class LyricsIndicator {
         this._document = null;
         this._translationDocument = null;
         this.setTranslationState('idle');
-        this._showLyricsMessage('Loading lyrics…');
+        this._showLyricsMessage(_('Loading lyrics…'));
     }
 
     updateTrackMetadata(metadata, trackKey) {
@@ -660,11 +661,11 @@ export class LyricsIndicator {
         this._document = document ?? null;
         this._translationDocument = null;
         if (document?.instrumental) {
-            this._showLyricsMessage('Instrumental');
+            this._showLyricsMessage(_('Instrumental'));
             return;
         }
         if (!document?.lines?.length) {
-            this._showLyricsMessage('No synchronized lyrics');
+            this._showLyricsMessage(_('No lyrics found'));
             return;
         }
 
@@ -731,30 +732,32 @@ export class LyricsIndicator {
     setTranslationState(status, {fromCache = false} = {}) {
         this._translationStatus = status;
         const states = {
-            idle: ['Translation available on request', 'Translate', true],
-            loading: ['Loading translation…', 'Loading…', false],
+            idle: [_('Translation available on request'), _('Translate'), true],
+            loading: [_('Loading translation…'), _('Loading…'), false],
             available: [
-                fromCache ? 'Translation loaded from cache' : 'Translation available',
-                'Refresh',
+                fromCache
+                    ? _('Translation loaded from cache')
+                    : _('Translation available'),
+                _('Refresh'),
                 true,
             ],
-            not_configured: ['Translation API key is not configured', '', false],
-            provider_unavailable: ['Translation provider unavailable', 'Retry', true],
-            network_error: ['Translation network error', 'Retry', true],
-            provider_error: ['Translation provider error', 'Retry', true],
-            authentication_error: ['Translation API key was rejected', 'Retry', true],
-            rate_limited: ['Translation rate limited', 'Retry', true],
-            invalid_response: ['Translation response was invalid', 'Retry', true],
-            canceled: ['Translation canceled', 'Retry', true],
-            same_language: ['Original language matches target language', '', false],
+            not_configured: [_('Translation API key is not configured'), '', false],
+            provider_unavailable: [_('Translation provider unavailable'), _('Retry'), true],
+            network_error: [_('Translation network error'), _('Retry'), true],
+            provider_error: [_('Translation provider error'), _('Retry'), true],
+            authentication_error: [_('Translation API key was rejected'), _('Retry'), true],
+            rate_limited: [_('Translation rate limited'), _('Retry'), true],
+            invalid_response: [_('Translation response was invalid'), _('Retry'), true],
+            canceled: [_('Translation canceled'), _('Retry'), true],
+            same_language: [_('Original language matches target language'), '', false],
             skipped: ['', '', false],
         };
         const [text, action, enabled] = states[status] ?? states.provider_error;
         this._translationStatusLabel.text = text;
         this._translationActionButton.label = action;
         this._translationActionButton.accessible_name = action
-            ? `${action} lyrics translation`
-            : 'Lyrics translation';
+            ? _('Lyrics translation action: %s').format(action)
+            : _('Lyrics translation');
         this._translationActionButton.visible = Boolean(action);
         setButtonEnabled(this._translationActionButton, enabled);
         this._updateTranslationControlVisibility();
@@ -837,12 +840,14 @@ export class LyricsIndicator {
     setOffsets(trackOffsetMs, globalOffsetMs) {
         const format = offsetMs => {
             const seconds = offsetMs / 1000;
-            return `${seconds >= 0 ? '+' : ''}${seconds.toFixed(1)} s`;
+            const value = `${seconds >= 0 ? '+' : ''}${seconds.toFixed(1)}`;
+            return _('%s s').format(value);
         };
         this._offsetLabel.text = format(trackOffsetMs);
-        this._effectiveOffsetLabel.text =
-            `Global ${format(globalOffsetMs)}  ·  ` +
-            `Effective ${format(trackOffsetMs + globalOffsetMs)}`;
+        this._effectiveOffsetLabel.text = _('Global %s  ·  Effective %s')
+            .format(
+                format(globalOffsetMs),
+                format(trackOffsetMs + globalOffsetMs));
         this._effectiveOffsetLabel.visible = globalOffsetMs !== 0;
         setButtonEnabled(
             this._decreaseButton, trackOffsetMs > MIN_OFFSET_MS);
@@ -864,7 +869,7 @@ export class LyricsIndicator {
 
     setPlayers(players, preferredPlayer) {
         this._playerMenu.menu.removeAll();
-        const autoItem = this._playerMenu.menu.addAction('Auto', () => {
+        const autoItem = this._playerMenu.menu.addAction(_('Auto'), () => {
             this._onPlayerSelected?.('auto');
         });
         autoItem.setOrnament(preferredPlayer === 'auto'
@@ -886,18 +891,19 @@ export class LyricsIndicator {
         }
 
         const selected = players.find(player => player.selected);
+        const playerLabel = GLib.markup_escape_text(_('Player'), -1);
         if (selected) {
             const displayName = GLib.markup_escape_text(
                 selected.displayName, -1);
             this._playerMenu.label.clutter_text.set_markup(
-                `<span size="smaller" alpha="58%">Player</span>` +
+                `<span size="smaller" alpha="58%">${playerLabel}</span>` +
                 `   ${displayName}`);
-            this._playerMenu.accessible_name =
-                `Player: ${selected.displayName}`;
+            this._playerMenu.accessible_name = _('Player: %s')
+                .format(selected.displayName);
         } else {
             this._playerMenu.label.clutter_text.set_markup(
-                '<span size="smaller" alpha="58%">Player</span>');
-            this._playerMenu.accessible_name = 'Player';
+                `<span size="smaller" alpha="58%">${playerLabel}</span>`);
+            this._playerMenu.accessible_name = _('Player');
         }
     }
 
